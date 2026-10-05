@@ -1,4 +1,5 @@
-{:tasks
+{:paths ["user"]
+ :tasks
  {:init (def emacs (or (System/getenv "EMACS") "emacs"))
 
   test {:doc "Run the ERT suite"
@@ -12,4 +13,7 @@
                         "-f" "batch-byte-compile" "bb-transient.el")}
 
   ci {:doc "What CI runs"
-      :depends [compile test]}}}
+      :depends [compile test]}
+
+  demo {:doc "Demo time!"
+        :cmd {:greet {:exec-fn demo/greet}}}}}

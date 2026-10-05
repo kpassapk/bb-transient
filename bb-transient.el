@@ -228,9 +228,15 @@ The `++=' extra-arguments value is split like a shell command line."
                      name)))
             options))
 
+(defun bb-transient--quote (arg)
+  "Quote ARG for the shell, leaving it bare when that is already safe."
+  (if (string-match-p "\\`[[:alnum:]_./=:,@+-]+\\'" arg)
+      arg
+    (shell-quote-argument arg)))
+
 (defun bb-transient--command (path args)
   "The shell command line for bb PATH with ARGS."
-  (mapconcat #'shell-quote-argument
+  (mapconcat #'bb-transient--quote
              (append (list bb-transient-program) path args)
              " "))
 

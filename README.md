@@ -1,6 +1,31 @@
 # bb-transient
 
-Transient menus for the task CLI in a project's `bb.edn`.
+Transient menus for [babashka](https://github.com/babashka/babashka) tasks.
+
+![bb-transient](./resources/bb-transient.gif)
+
+## Why?
+
+Babashka tasks [recently][bb-changelog] gained [subcommands and
+switches][bb-tasks]. This means that tasks can now be full-blown
+project CLIs.
+
+Full-blown CLIs get complex pretty quickly. Babashka already supports
+completion for various shells (bash, fish, zsh, etc), to help you quickly
+construct complex commands and avoid typos.
+
+This project serves a similar purpose. It analyzes babashka's CLI spec
+and generates an Emacs [transient][transient] menu. It lets you
+explore subcommands, set CLI options, and view command output.
+
+This library is created with AI assistance. If you notice any bugs,
+please open a Github ticket.
+
+[bb-changelog]: https://github.com/babashka/babashka/blob/master/CHANGELOG.md#113219-2026-07-27
+[bb-tasks]: https://blog.michielborkent.nl/babashka-tasks-cli.html
+[transient]: https://github.com/magit/transient
+
+## Usage
 
 `M-x bb-transient` in any buffer under a project with a `bb.edn` opens a
 menu of its tasks.  Tasks with a `:cmd` table open a submenu; commands

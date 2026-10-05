@@ -72,7 +72,7 @@
       err (assoc :error err))))
 
 (defn- node [root nm v]
-  (let [nm (str nm)]
+  (let [nm (if (keyword? nm) (name nm) (str nm))]
     (if-not (map? v)
       {:name nm :doc nil :options []}
       (do (doseq [p (:extra-paths v)]

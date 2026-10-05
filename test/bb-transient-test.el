@@ -96,8 +96,12 @@
 
 (ert-deftest bb-transient-test-command ()
   (let ((bb-transient-program "bb"))
+    (should (equal (bb-transient--command '("greet") '("--lang=zh" "--name=Alice"))
+                   "bb greet --lang=zh --name=Alice"))
     (should (equal (bb-transient--command '("work" "new") '("--title=A b"))
-                   "bb work new --title\\=A\\ b"))))
+                   "bb work new --title\\=A\\ b"))
+    (should (equal (bb-transient--command '("x") '("--v=$HOME;rm"))
+                   "bb x --v\\=\\$HOME\\;rm"))))
 
 (ert-deftest bb-transient-test-run-end-to-end ()
   (let* ((bb-transient-use-comint nil)
