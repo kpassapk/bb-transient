@@ -1,0 +1,22 @@
+(ns cmds)
+
+(defn hello
+  "Say hello
+  to someone"
+  {:org.babashka/cli {:spec {:name {:desc "Who to greet" :alias :n :require true}
+                             :loud {:desc "Shout" :coerce :boolean}
+                             :times {:desc "Repeat count" :default 1}}}}
+  [{:keys [name loud times]}]
+  (dotimes [_ times]
+    (println (cond-> (str "hello " name) loud .toUpperCase))))
+
+(defn deep
+  "No options"
+  [_]
+  (println "deep"))
+
+(defn echo
+  "Print the parsed options"
+  {:org.babashka/cli {:spec [[:a {:desc "First"}] [:b {:desc "Second"}]]}}
+  [opts]
+  (prn opts))

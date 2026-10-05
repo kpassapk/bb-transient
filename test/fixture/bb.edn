@@ -1,0 +1,16 @@
+{:paths ["bb"]
+ :tasks
+ {zeta {:doc "Listed first, so order is file order"
+        :task (println "zeta")}
+
+  greet
+  {:doc "Greeting commands"
+   :cmd {"hello" {:exec-fn cmds/hello}
+         "nested" {:cmd {"deep" {:exec-fn cmds/deep}}}}}
+
+  echo {:doc "Echo its options" :exec-fn cmds/echo}
+
+  broken {:doc "Points at a missing fn" :exec-fn cmds/nope}
+
+  -hidden {:task (println "private by name")}
+  secret {:private true :task (println "private by flag")}}}
