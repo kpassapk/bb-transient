@@ -9,6 +9,15 @@
 ;;                             "options": [{"name": "title", ...}]}]}]}
 ;;
 ;; A node has either "children" (a :cmd table) or "options" (a leaf).
+;;
+;; bb.edn is EDN, so :cmd cannot name a var.  A task that dispatches
+;; its own command table points at it with :bb-transient/cmd instead:
+;;
+;;   work {:bb-transient/cmd aly.work/command
+;;         :task (aly.cli/dispatch aly.work/command *command-line-args*)}
+;;
+;; The var holds what :cmd would, {:doc "..." :cmd {"ls" {:exec-fn ...}}},
+;; with each :exec-fn a symbol.
 
 (ns bb-transient.introspect
   (:require [babashka.classpath :as cp]
@@ -71,6 +80,12 @@
              :options (mapv option spec)}
       err (assoc :error err))))
 
+(defn- cmd-var
+  "Resolve a :bb-transient/cmd symbol to the command spec it names."
+  [sym]
+  @(or (requiring-resolve sym)
+       (throw (ex-info (str "Unable to resolve " sym) {}))))
+
 (defn- node [root nm v]
   (let [nm (if (keyword? nm) (name nm) (str nm))]
     (if-not (map? v)
@@ -78,6 +93,15 @@
       (do (doseq [p (:extra-paths v)]
             (cp/add-classpath (str (fs/path root p))))
           (cond
+            (:bb-transient/cmd v)
+            (let [sym (:bb-transient/cmd v)
+                  [spec err] (try [(cmd-var sym) nil]
+                                  (catch Exception e [nil (ex-message e)]))]
+              (if err
+                {:name nm :doc (:doc v) :options [] :error err}
+                (node root nm (-> (dissoc v :bb-transient/cmd)
+                                  (merge (select-keys spec [:cmd :exec-fn]))
+                                  (update :doc #(or % (:doc spec)))))))
             (:cmd v)     {:name nm :doc (:doc v)
                           :children (mapv (fn [[k c]] (node root k c)) (:cmd v))}
             (:exec-fn v) (leaf nm (:doc v) v)

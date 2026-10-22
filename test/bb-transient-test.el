@@ -18,7 +18,7 @@
 (ert-deftest bb-transient-test-tree-order-and-privacy ()
   (let ((tree (bb-transient--tree bb-transient-test--fixture t)))
     (should (equal (mapcar (lambda (n) (alist-get 'name n)) tree)
-                   '("zeta" "greet" "echo" "broken")))))
+                   '("zeta" "greet" "shared" "missing" "echo" "broken")))))
 
 (ert-deftest bb-transient-test-tree-specs ()
   (let* ((tree (bb-transient--tree bb-transient-test--fixture t))
@@ -42,6 +42,21 @@
              "deep" (alist-get 'children
                                (bb-transient-test--find
                                 "nested" (alist-get 'children greet)))))))
+
+(ert-deftest bb-transient-test-tree-cmd-var ()
+  (let* ((tree (bb-transient--tree bb-transient-test--fixture t))
+         (shared (bb-transient-test--find "shared" tree))
+         (hello (bb-transient-test--find "hello" (alist-get 'children shared))))
+    ;; The task has no :doc, so the var's is used.
+    (should (equal (alist-get 'doc shared) "Commands from a var"))
+    (should (equal (mapcar (lambda (o) (alist-get 'name o)) (alist-get 'options hello))
+                   '("name" "loud" "times")))
+    (should (bb-transient-test--find
+             "deep" (alist-get 'children
+                               (bb-transient-test--find
+                                "inner" (alist-get 'children shared)))))
+    (should (string-match-p "spec/nope"
+                            (alist-get 'error (bb-transient-test--find "missing" tree))))))
 
 (ert-deftest bb-transient-test-tree-unresolved ()
   (let ((broken (bb-transient-test--find

@@ -49,6 +49,18 @@ resolves each `:exec-fn`, and reads the `:spec` from its
 | `:require true`      | marked "(required)", checked before run  |
 | `:default x`         | shown as "(default x)"                   |
 
+A task that dispatches its own command table, which `bb.edn` can't
+name in `:cmd`, can point at the var holding it:
+
+```clojure
+work {:bb-transient/cmd my.work/command
+      :requires ([my.cli] [my.work])
+      :task (my.cli/dispatch my.work/command *command-line-args*)}
+```
+
+The var holds what `:cmd` would, `{:doc "..." :cmd {"ls" {:exec-fn
+'my.work/ls}}}`, and gets the same menus.  bb itself ignores the key.
+
 Every options menu also has `-=` for extra arguments, split like a
 shell command line, for flags the spec doesn't declare.
 

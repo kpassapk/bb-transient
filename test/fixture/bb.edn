@@ -8,6 +8,12 @@
    :cmd {"hello" {:exec-fn cmds/hello}
          "nested" {:cmd {"deep" {:exec-fn cmds/deep}}}}}
 
+  shared {:bb-transient/cmd spec/command
+          :requires ([spec])
+          :task (prn spec/command *command-line-args*)}
+
+  missing {:bb-transient/cmd spec/nope :task nil}
+
   echo {:doc "Echo its options" :exec-fn cmds/echo}
 
   broken {:doc "Points at a missing fn" :exec-fn cmds/nope}
