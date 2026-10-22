@@ -98,6 +98,33 @@ needed if you use this.
 
 [ghostel]: https://github.com/dakra/ghostel
 
+## Layers
+
+A menu can hold other projects' tasks too, a group per project.  Each
+function in `bb-transient-layers-functions` gets the current project's
+directory and returns `(LABEL . DIRECTORY)` pairs, outermost first:
+
+```elisp
+(add-hook 'bb-transient-layers-functions
+          (lambda (_root) '(("shared" . "~/src/shared-tasks/"))))
+```
+
+- Every command runs from the current project.  Another project's task
+  runs as `bb --config <that project>/bb.edn <task>`, so its `:paths` and
+  `:deps` still resolve.
+- A task in an inner project hides an outer project's task of the same
+  name.  `:cmd` tables aren't merged.
+- The current project's tasks get keys first.  `g` re-reads every project.
+- A function that returns the current project itself labels its group.
+
+[root-transient](https://github.com/kpassapk/root) uses this to show a
+project's tasks along with its ancestors'.
+
+`bb-transient-directory-function` decides where commands run (the
+project root by default); `(lambda () default-directory)` runs them from
+the buffer's directory instead.  From Lisp, `bb-transient-run` runs a task
+without the menu and `bb-transient-tasks` returns a project's task tree.
+
 ## Development
 
 ```

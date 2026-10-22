@@ -1,0 +1,199 @@
+#+title:      Public API for root-transient
+#+date:       [2026-10-22 Thu 17:19]
+#+filetags:   :api:emacs:
+#+identifier: 20261022T171909
+#+TARGET:     ..                                  (project)
+#+TARGET:     ../../root                          (root)
+#+CATEGORY:   work
+#+PROPERTY:   header-args :results output
+
+* DONE Plan
+
+root-transient (=kpassapk/root/emacs=) shows one menu for a project
+and its ancestors, a group per project.  It is built from bb-transient's
+internals today.  Goal: root-transient uses only public bb-transient
+names, so bb-transient can rename or reshape its =--= functions without
+breaking it.
+
+** What root-transient uses today
+
+| Private name             | Where                    | For                                   |
+|--------------------------+--------------------------+---------------------------------------|
+| =bb-transient--root=     | =root-transient.el=      | the current project's directory       |
+| =bb-transient--tree=     | =root-transient--layers= | an ancestor's task tree, cached       |
+| =bb-transient--key=      | =root-transient--groups= | keys unique across /all/ groups       |
+| =bb-transient--describe= | =root-transient--groups= | a task's menu line                    |
+| =bb-transient--define=   | =root-transient--groups= | a task's command (menu or leaf)       |
+| =bb-transient--run=      | tests                    | run an ancestor task from the leaf    |
+| =bb-transient--sym=      | tests                    | assert a suffix is the ancestor's cmd |
+
+Behaviour it also leans on, but no name: =bb-transient--directory=
+(added for root-transient, still uncommitted here) runs a command from
+the project the menu was opened in and adds =--config= when the menu was
+built from another project's bb.edn.  Nothing documents that rule, so
+it can change without notice.
+
+** Two ways to get there
+
+- A. Export the pieces :: make =--root=, =--tree= and a "suffixes for
+  these nodes" function public.  root-transient keeps building the menu.
+  Smallest change here, but the public surface is shaped by how
+  root-transient happens to work today (key allocation, group vectors,
+  transient's layout).
+
+- B. Layers in bb-transient (recommended) :: bb-transient learns that a
+  menu can hold more than one project.  A single hook says which
+  projects; bb-transient builds the groups, gives out keys, hides
+  overridden tasks, refreshes and runs.  root-transient shrinks to
+  "find the chain" plus one =add-hook=.
+
+B because the hard parts (keys unique across groups, shadowing, =g=
+re-reading every bb.edn, where to run) are menu concerns, and
+bb-transient already owns the menu.  The public surface is one hook and
+two functions, none of which mention transient's internals.
+
+** Decisions
+
+- Layers :: a /layer/ is =(LABEL . DIRECTORY)=, a project whose bb.edn
+  contributes a group.  The current project is always a layer, the last
+  one.  With no other layers the menu looks as it does today: one
+  "bb tasks" group, no project label.
+
+- Where commands run :: always from the current project (the last layer).
+  A command from another layer gets =--config <layer>/bb.edn=.  This is
+  the rule =bb-transient--directory= already follows; it becomes
+  documented behaviour, with a variable to override it.
+
+- Shadowing :: an inner layer's task hides an outer layer's task with
+  the same top-level name.  Only top-level names; =:cmd= tables are not
+  merged.  That is what bb itself does when one bb.edn replaces another.
+
+- Keys :: handed out innermost first, from one pool, so the current
+  project's tasks get the letters of their names.
+
+* DONE Public API in bb-transient
+
+** DONE =bb-transient-layers-functions= (hook)
+
+Abnormal hook.  Each function is called with the current project's
+directory and returns a list of layers, outermost first.  Results are
+concatenated in hook order; the current project is appended last.
+Duplicate directories are dropped, keeping the innermost.
+
+#+begin_src emacs-lisp
+(defvar bb-transient-layers-functions nil
+  "Functions returning extra projects to show in the bb-transient menu.
+Each is called with the current project's directory and returns a list
+of (LABEL . DIRECTORY), outermost first.  Each DIRECTORY's bb.edn tasks
+become a group headed LABEL, above the current project's own.")
+#+end_src
+
+A function that signals is reported with =message= and skipped, so one
+broken ancestor never hides the menu.
+
+** DONE =bb-transient-project-root= (function)
+
+Public name for =bb-transient--root=.  Optional DIRECTORY argument
+(default =default-directory=) so callers don't have to bind it.
+
+#+begin_src emacs-lisp
+(defun bb-transient-project-root (&optional directory)
+  "The directory holding the nearest bb.edn at or above DIRECTORY, or signal.")
+#+end_src
+
+Keep =bb-transient--root= as an obsolete alias for one release.
+(Done for =--tree= too, since root-transient calls both.)
+
+** DONE =bb-transient-tasks= (function)
+
+Public name for =bb-transient--tree=: the parsed task tree of a project,
+cached and refreshed on bb.edn's mtime.  Document the node shape (alist
+with =name=, =doc=, =children= or =options=, =terminal=, =error=) since
+callers now see it.  root-transient only needs it for tests once layers
+exist, but =M-x= helpers (listing tasks, completing-read over them)
+will want it too.
+
+** DONE =bb-transient-directory-function= (variable)
+
+Replaces the hard-coded rule in =bb-transient--directory=.
+
+#+begin_src emacs-lisp
+(defcustom bb-transient-directory-function #'bb-transient-project-root
+  "Function returning the directory commands run from.
+Called with no arguments in the buffer the menu was opened from.
+When the result isn't the project a command came from, that project's
+bb.edn is passed as --config."
+  :type 'function)
+#+end_src
+
+Lets someone run tasks from =default-directory= instead of the project
+root, which the original request ("run in the current working
+directory") may have meant.
+
+** DONE =bb-transient-run= (function)
+
+Public entry for running a task without the menu, used by
+root-transient's end-to-end test and handy from Lisp:
+
+#+begin_src emacs-lisp
+(defun bb-transient-run (path &optional args project terminal)
+  "Run bb task PATH (a list of names) with ARGS, return its buffer.
+PROJECT is the directory whose bb.edn defines the task; nil means the
+current project.")
+#+end_src
+
+** DONE Menu: one group per layer
+
+- =bb-transient--setup= takes the layer list instead of one root.
+- One group per layer, headed by its label; the current project's group
+  keeps the heading "bb tasks" when it is the only layer.
+- Keys from a shared pool, innermost layer first.
+- Overridden top-level tasks dropped from outer layers.
+- The top menu's symbol is keyed on the whole layer list (not just the
+  current root), so two projects with different chains don't share a
+  menu.  Submenu symbols stay keyed on the layer that defines them, so an
+  ancestor's submenus are shared across descendants.
+- =g= refreshes every layer's tree.
+
+** DONE Tests (bb-transient)
+
+- A hook adding the fixture as an outer layer: groups in order, unique
+  keys, a shadowed task missing from the outer group.
+- A signalling hook function: menu still opens with the current project.
+- =bb-transient-run= with PROJECT set from another directory: output
+  shows =--config= and the cwd is the current project (moves the
+  existing =bb-transient-test-run-from-another-project=).
+- =bb-transient-directory-function= set to =default-directory=: runs in
+  a subdirectory.
+
+** DONE README
+
+New section "More than one project": the hook, the run rule, shadowing,
+with root-transient as the example.
+
+* DONE Follow-up in root-transient
+
+Done: =root-transient-layers= on the hook, =root-transient-mode= to add
+it globally, =M-x root-transient= to bind it for one menu.
+
+Planned:
+
+#+begin_src emacs-lisp
+(defun root-transient-layers (root)
+  "ROOT's ancestors, outermost first, for `bb-transient-layers-functions'."
+  (cdr (reverse (root-transient--chain root))))
+
+(add-hook 'bb-transient-layers-functions #'root-transient-layers)
+#+end_src
+
+- Delete =root-transient--layers=, =--groups=, =--setup=, =--sym=,
+  =root-transient-refresh=; =M-x root-transient= becomes =M-x
+  bb-transient= (keep =root-transient= as an alias, or a minor mode
+  that adds the hook).
+- Tests use =bb-transient-tasks= and =bb-transient-run= only.
+- Bump =Package-Requires= to the bb-transient version that has the hook.
+- Check: =grep -n 'bb-transient--' emacs/ -r= finds nothing.
+
+#+begin_src sh :dir ../../root
+grep -rn 'bb-transient--' emacs/ || echo clean
+#+end_src

@@ -1,0 +1,3 @@
+{:tasks
+ {zeta  {:doc "Hidden by the fixture's own zeta" :task (println "outer zeta")}
+  outer {:doc "Only out here" :task (println "outer in" (str (babashka.fs/cwd)))}}}

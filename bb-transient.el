@@ -2,7 +2,7 @@
 
 ;; Author: Kyle Passarelli
 ;; URL: https://github.com/kpassapk/bb-transient
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "29.1") (transient "0.4"))
 ;; Keywords: tools, processes, babashka, clojure
 
@@ -36,6 +36,11 @@
 ;; task map or on its :exec-fn's metadata) runs in an interactive
 ;; `ghostel-compile' buffer instead.  `t' in an options menu, or a
 ;; prefix argument on a bare leaf, flips the choice for one run.
+;;
+;; A menu can show other projects' tasks too, a group per project:
+;; each function in `bb-transient-layers-functions' names some.  Their
+;; commands run from the current project with their own bb.edn as
+;; --config, and the current project's tasks hide theirs by name.
 
 ;;; Code:
 
@@ -59,6 +64,25 @@
 The buffer is still a `compilation-mode' buffer either way."
   :type 'boolean)
 
+(defcustom bb-transient-directory-function #'bb-transient-project-root
+  "Function returning the directory commands run from.
+It is called with no arguments in the buffer the menu was opened
+from.  When the result isn't the project a command comes from, that
+project's bb.edn is passed as --config.  To run from the buffer's own
+directory instead of its project's root, use
+\=(lambda () default-directory)."
+  :type 'function)
+
+(defvar bb-transient-layers-functions nil
+  "Functions naming other projects to show in the menu.
+Each is called with the current project's directory and returns a
+list of (LABEL . DIRECTORY), outermost first.  Each DIRECTORY's bb.edn
+tasks become a group headed LABEL, above the current project's own,
+and an inner project's task hides an outer one of the same name.
+A function that returns the current project itself labels its group.
+Commands still run from the current project; see
+`bb-transient-directory-function'.")
+
 (defconst bb-transient--script
   (expand-file-name "bb-transient.clj"
                     (file-name-directory (or load-file-name buffer-file-name)))
@@ -69,10 +93,16 @@ The buffer is still a `compilation-mode' buffer either way."
 (defvar bb-transient--cache (make-hash-table :test #'equal)
   "Project root -> (MTIME . TREE).")
 
-(defun bb-transient--root ()
-  "Return the directory holding the nearest bb.edn, or signal."
-  (or (locate-dominating-file default-directory "bb.edn")
-      (user-error "No bb.edn in %s or above" default-directory)))
+(defun bb-transient-project-root (&optional directory)
+  "The directory holding the nearest bb.edn at or above DIRECTORY, or signal.
+DIRECTORY defaults to `default-directory'."
+  (let ((dir (or directory default-directory)))
+    (expand-file-name
+     (or (locate-dominating-file dir "bb.edn")
+         (user-error "No bb.edn in %s or above" dir)))))
+
+(define-obsolete-function-alias 'bb-transient--root
+  #'bb-transient-project-root "0.2.0")
 
 (defun bb-transient--introspect (root)
   "Run the introspection script in ROOT and return the parsed tree."
@@ -97,9 +127,19 @@ The buffer is still a `compilation-mode' buffer either way."
                                           :null-object nil :false-object nil))))
       (delete-file stderr))))
 
-(defun bb-transient--tree (root &optional refresh)
-  "Return ROOT's command tree, reusing the cache unless REFRESH or bb.edn changed."
-  (let* ((mtime (file-attribute-modification-time
+(defun bb-transient-tasks (root &optional refresh)
+  "The bb tasks of the project in ROOT, as a list of nodes.
+Cached until bb.edn changes, or REFRESH.  A node is an alist:
+
+  name      the task or subcommand name
+  doc       its one-line doc, or nil
+  children  for a :cmd table, its nodes
+  options   for a leaf, its babashka.cli options, each an alist of
+            name, desc, alias, require, default and boolean
+  terminal  non-nil when it should run in a terminal
+  error     why its :exec-fn or :cmd could not be resolved"
+  (let* ((root (file-name-as-directory (expand-file-name root)))
+         (mtime (file-attribute-modification-time
                  (file-attributes (expand-file-name "bb.edn" root))))
          (hit (gethash root bb-transient--cache)))
     (if (and hit (not refresh) (equal (car hit) mtime))
@@ -107,6 +147,9 @@ The buffer is still a `compilation-mode' buffer either way."
       (let ((tree (bb-transient--introspect root)))
         (puthash root (cons mtime tree) bb-transient--cache)
         tree))))
+
+(define-obsolete-function-alias 'bb-transient--tree
+  #'bb-transient-tasks "0.2.0")
 
 ;;;; Keys
 
@@ -179,7 +222,7 @@ leaf becomes a command that runs straight away."
 
 (defun bb-transient--define-menu (sym root path node children)
   "Define SYM as a menu over CHILDREN of NODE at PATH in ROOT."
-  (let* ((taken (if path '("q") '("q" "g")))
+  (let* ((taken (list "q"))
          (suffixes
           (mapcar (lambda (child)
                     (let ((key (bb-transient--key (alist-get 'name child) taken)))
@@ -188,13 +231,11 @@ leaf becomes a command that runs straight away."
                             (bb-transient--define
                              root (append path (list (alist-get 'name child))) child))))
                   children))
-         (heading (if path (concat "bb " (string-join path " ")) "bb tasks")))
+         (heading (concat "bb " (string-join path " "))))
     (eval
      `(transient-define-prefix ,sym ()
         ,(or (alist-get 'doc node) heading)
-        [,heading ,@suffixes]
-        ,@(unless path
-            '([("g" "Refresh" bb-transient-refresh :transient nil)])))
+        [,heading ,@suffixes])
      t)))
 
 (defun bb-transient--define-leaf (sym node options)
@@ -250,19 +291,32 @@ and the `++terminal' switch is dropped."
       arg
     (shell-quote-argument arg)))
 
-(defun bb-transient--command (path args)
-  "The shell command line for bb PATH with ARGS."
+(defun bb-transient--command (path args &optional config)
+  "The shell command line for bb PATH with ARGS.
+With CONFIG, a bb.edn file, pass it as --config."
   (mapconcat #'bb-transient--quote
-             (append (list bb-transient-program) path args)
+             (append (list bb-transient-program)
+                     (when config (list "--config" config))
+                     path args)
              " "))
 
+(defun bb-transient--directory (root)
+  "Where to run a command from project ROOT's bb.edn.
+See `bb-transient-directory-function'; ROOT when it has no answer."
+  (expand-file-name
+   (or (ignore-errors (funcall bb-transient-directory-function)) root)))
+
 (defun bb-transient--run (root path args &optional terminal)
-  "Run bb PATH with ARGS from ROOT and return the output buffer.
-It is a compilation buffer, or with TERMINAL an interactive
-`ghostel-compile' buffer, so TUIs get a real terminal."
-  (let ((default-directory root)
-        (command (bb-transient--command path args))
-        (name (format "*bb %s*" (string-join path " "))))
+  "Run bb PATH with ARGS, using ROOT's bb.edn, and return the output buffer.
+It runs from `bb-transient--directory', passing ROOT's bb.edn as
+--config when that is not ROOT.  The buffer is a compilation buffer,
+or with TERMINAL an interactive `ghostel-compile' buffer, so TUIs get
+a real terminal."
+  (let* ((default-directory (bb-transient--directory root))
+         (config (unless (file-equal-p default-directory root)
+                   (expand-file-name "bb.edn" root)))
+         (command (bb-transient--command path args config))
+         (name (format "*bb %s*" (string-join path " "))))
     (if terminal
         (progn
           (unless (require 'ghostel-compile nil t)
@@ -271,6 +325,13 @@ It is a compilation buffer, or with TERMINAL an interactive
             (ghostel-compile command t)))
       (let ((compilation-buffer-name-function (lambda (_mode) name)))
         (compile command bb-transient-use-comint)))))
+
+(defun bb-transient-run (path &optional args project terminal)
+  "Run bb task PATH (a list of names) with ARGS and return its buffer.
+PROJECT is the directory whose bb.edn defines the task; nil means the
+current project.  It runs from `bb-transient-directory-function', in
+a compilation buffer, or with TERMINAL a `ghostel-compile' one."
+  (bb-transient--run (or project (bb-transient-project-root)) path args terminal))
 
 (transient-define-suffix bb-transient-run-current ()
   "Run the command the current menu describes."
@@ -289,24 +350,82 @@ It is a compilation buffer, or with TERMINAL an interactive
 
 ;;;; Entry points
 
+(defun bb-transient--layers (root)
+  "The projects in ROOT's menu as (LABEL . DIRECTORY), outermost first.
+The last is ROOT, labelled by its directory name unless a function in
+`bb-transient-layers-functions' labels it."
+  (let ((root (file-name-as-directory (expand-file-name root)))
+        found layers)
+    (run-hook-wrapped
+     'bb-transient-layers-functions
+     (lambda (fn)
+       (condition-case err
+           (setq found (append found (funcall fn root)))
+         (error (message "bb-transient: %s failed: %s" fn (error-message-string err))))
+       nil))
+    (let ((label (file-name-nondirectory (directory-file-name root))))
+      ;; Innermost first, so a project listed twice keeps its inner place.
+      (dolist (layer (reverse found))
+        (let ((dir (file-name-as-directory (expand-file-name (cdr layer)))))
+          (cond ((file-equal-p dir root) (setq label (car layer)))
+                ((seq-find (lambda (l) (file-equal-p (cdr l) dir)) layers))
+                (t (push (cons (car layer) dir) layers)))))
+      (append layers (list (cons label root))))))
+
 (defun bb-transient--setup (root &optional refresh)
-  "Define the menus for ROOT and return the top-level prefix."
-  (bb-transient--define root nil
-                        `((name . "bb")
-                          (children . ,(bb-transient--tree root refresh)))))
+  "Define the top menu for ROOT and its layers, and return its symbol.
+A group per layer, outermost first.  Keys go to the innermost layer
+first, so ROOT's tasks get the letters of their names.  A layer whose
+tasks can't be read is left out, unless it is ROOT."
+  (let* ((root (file-name-as-directory (expand-file-name root)))
+         (layers (bb-transient--layers root))
+         (sym (intern (format "bb-transient:%s"
+                              (substring (md5 (prin1-to-string layers)) 0 6))))
+         (taken (list "q" "g"))
+         seen groups)
+    (pcase-dolist (`(,label . ,dir) (reverse layers))
+      (when-let* ((tree (condition-case err
+                            (bb-transient-tasks dir refresh)
+                          (error (if (file-equal-p dir root)
+                                     (signal (car err) (cdr err))
+                                   (message "bb-transient: skipping %s: %s"
+                                            label (error-message-string err))
+                                   nil)))))
+        (let ((tree (seq-remove (lambda (n) (member (alist-get 'name n) seen)) tree)))
+          (setq seen (append seen (mapcar (lambda (n) (alist-get 'name n)) tree)))
+          (push (vconcat
+                 (list (if (cdr layers) label "bb tasks"))
+                 (mapcar (lambda (node)
+                           (let ((key (bb-transient--key (alist-get 'name node) taken)))
+                             (push key taken)
+                             (list key (bb-transient--describe node)
+                                   (bb-transient--define
+                                    dir (list (alist-get 'name node)) node))))
+                         tree))
+                groups))))
+    (put sym 'bb-transient-root root)
+    (put sym 'bb-transient-layers layers)
+    (eval
+     `(transient-define-prefix ,sym ()
+        "bb tasks"
+        ,@groups
+        [("g" "Refresh" bb-transient-refresh :transient nil)])
+     t)
+    sym))
 
 (defun bb-transient-refresh ()
   "Re-read bb.edn and the task specs, then reopen the menu."
   (interactive)
   (let ((root (or (get transient-current-command 'bb-transient-root)
-                  (bb-transient--root))))
+                  (bb-transient-project-root))))
     (transient-setup (bb-transient--setup root t))))
 
 ;;;###autoload
 (defun bb-transient ()
-  "Open a transient menu of the bb tasks in the current project."
+  "Open a transient menu of the bb tasks in the current project.
+Projects named by `bb-transient-layers-functions' get groups too."
   (interactive)
-  (transient-setup (bb-transient--setup (bb-transient--root))))
+  (transient-setup (bb-transient--setup (bb-transient-project-root))))
 
 (provide 'bb-transient)
 ;;; bb-transient.el ends here
