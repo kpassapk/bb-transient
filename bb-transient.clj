@@ -58,10 +58,16 @@
    :default (jsonable default)
    :boolean (= :boolean coerce)})
 
+(defn- resolve-var
+  "A var for SYM-OR-VAR (bb.edn may hold either), or throw."
+  [x]
+  (cond (var? x) x
+        (symbol? x) (or (requiring-resolve x)
+                        (throw (ex-info (str "Unable to resolve " x) {})))
+        :else (throw (ex-info (str "Not a symbol or var: " (pr-str x)) {}))))
+
 (defn- leaf [nm doc {:keys [exec-fn] :as task}]
-  (let [[v err] (try [(or (requiring-resolve exec-fn)
-                          (throw (ex-info (str "Unable to resolve " exec-fn) {})))
-                      nil]
+  (let [[v err] (try [(resolve-var exec-fn) nil]
                      (catch Exception e [nil (ex-message e)]))
         m (meta v)
         spec (concat (spec-entries (get-in m [:org.babashka/cli :spec]))
@@ -71,6 +77,11 @@
              :options (mapv option spec)}
       err (assoc :error err))))
 
+(defn- cmd-table
+  "A :cmd value is a map, or a symbol naming a var that holds one."
+  [cmd]
+  (if (map? cmd) cmd @(resolve-var cmd)))
+
 (defn- node [root nm v]
   (let [nm (if (keyword? nm) (name nm) (str nm))]
     (if-not (map? v)
@@ -78,8 +89,11 @@
       (do (doseq [p (:extra-paths v)]
             (cp/add-classpath (str (fs/path root p))))
           (cond
-            (:cmd v)     {:name nm :doc (:doc v)
-                          :children (mapv (fn [[k c]] (node root k c)) (:cmd v))}
+            (:cmd v)     (let [[cmd err] (try [(cmd-table (:cmd v)) nil]
+                                              (catch Exception e [nil (ex-message e)]))]
+                           (cond-> {:name nm :doc (:doc v)
+                                    :children (mapv (fn [[k c]] (node root k c)) cmd)}
+                             err (assoc :error err)))
             (:exec-fn v) (leaf nm (:doc v) v)
             :else        {:name nm :doc (:doc v) :options []})))))
 

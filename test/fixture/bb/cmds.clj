@@ -20,3 +20,7 @@
   {:org.babashka/cli {:spec [[:a {:desc "First"}] [:b {:desc "Second"}]]}}
   [opts]
   (prn opts))
+
+(def table
+  "A cmd table whose :exec-fns are vars, not symbols"
+  {"echo" {:exec-fn #'cmds/echo}})

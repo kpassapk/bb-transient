@@ -18,7 +18,7 @@
 (ert-deftest bb-transient-test-tree-order-and-privacy ()
   (let ((tree (bb-transient--tree bb-transient-test--fixture t)))
     (should (equal (mapcar (lambda (n) (alist-get 'name n)) tree)
-                   '("zeta" "greet" "echo" "broken")))))
+                   '("zeta" "greet" "echo" "broken" "table")))))
 
 (ert-deftest bb-transient-test-tree-specs ()
   (let* ((tree (bb-transient--tree bb-transient-test--fixture t))
@@ -59,6 +59,17 @@
     ;; A leaf without options is a plain command, not a menu.
     (should (commandp deep))
     (should-not (get deep 'transient--prefix))))
+
+;; `:cmd some/var' names a var holding the table.
+(ert-deftest bb-transient-test-tree-cmd-var ()
+  (let* ((table (bb-transient-test--find
+                 "table" (bb-transient--tree bb-transient-test--fixture t)))
+         (echo (bb-transient-test--find "echo" (alist-get 'children table))))
+    (should-not (alist-get 'error table))
+    (should (equal (alist-get 'doc echo) "Print the parsed options"))
+    (should (equal (mapcar (lambda (o) (alist-get 'name o))
+                           (alist-get 'options echo))
+                   '("a" "b")))))
 
 ;;;; Pure helpers
 

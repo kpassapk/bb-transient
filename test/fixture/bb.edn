@@ -12,5 +12,7 @@
 
   broken {:doc "Points at a missing fn" :exec-fn cmds/nope}
 
+  table {:doc "A :cmd held in a var" :cmd cmds/table}
+
   -hidden {:task (println "private by name")}
   secret {:private true :task (println "private by flag")}}}
