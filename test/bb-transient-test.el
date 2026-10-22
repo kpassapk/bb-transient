@@ -18,7 +18,7 @@
 (ert-deftest bb-transient-test-tree-order-and-privacy ()
   (let ((tree (bb-transient--tree bb-transient-test--fixture t)))
     (should (equal (mapcar (lambda (n) (alist-get 'name n)) tree)
-                   '("zeta" "greet" "echo" "broken" "table")))))
+                   '("zeta" "greet" "echo" "broken" "table" "tui")))))
 
 (ert-deftest bb-transient-test-tree-specs ()
   (let* ((tree (bb-transient--tree bb-transient-test--fixture t))
@@ -71,6 +71,23 @@
                            (alist-get 'options echo))
                    '("a" "b")))))
 
+;; `:bb-transient/terminal' on the fn or in the task map marks a TUI.
+(ert-deftest bb-transient-test-tree-terminal ()
+  (let ((tui (alist-get 'children
+                        (bb-transient-test--find
+                         "tui" (bb-transient--tree bb-transient-test--fixture t)))))
+    (should (eq (alist-get 'terminal (bb-transient-test--find "top" tui)) t))
+    (should (eq (alist-get 'terminal (bb-transient-test--find "watch" tui)) t))
+    (should-not (alist-get 'terminal (bb-transient-test--find "plain" tui)))))
+
+(ert-deftest bb-transient-test-setup-terminal-default ()
+  (let* ((root bb-transient-test--fixture)
+         (_ (bb-transient--setup root t))
+         (watch (bb-transient--sym root '("tui" "watch")))
+         (echo (bb-transient--sym root '("echo"))))
+    (should (equal (oref (get watch 'transient--prefix) default-value) '("++terminal")))
+    (should-not (slot-boundp (get echo 'transient--prefix) 'default-value))))
+
 ;;;; Pure helpers
 
 (ert-deftest bb-transient-test-key ()
@@ -96,7 +113,8 @@
 
 (ert-deftest bb-transient-test-args ()
   (should (equal (bb-transient--args '("--title=A b" "++=--x 1 \"two words\""))
-                 '("--title=A b" "--x" "1" "two words"))))
+                 '("--title=A b" "--x" "1" "two words")))
+  (should (equal (bb-transient--args '("++terminal" "--a=1")) '("--a=1"))))
 
 (ert-deftest bb-transient-test-missing ()
   (let ((opts '(((name . "title") (require . t))

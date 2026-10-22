@@ -24,3 +24,9 @@
 (def table
   "A cmd table whose :exec-fns are vars, not symbols"
   {"echo" {:exec-fn #'cmds/echo}})
+
+(defn top
+  "Pretends to be a TUI"
+  {:bb-transient/terminal true}
+  [_]
+  (println "top"))

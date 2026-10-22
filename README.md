@@ -73,6 +73,31 @@ Optionally add it to `project-switch-commands`:
 `bb-transient-use-comint` (default `t`) runs commands in comint mode so
 they can read input; `bb-transient-program` is the bb executable.
 
+## TUIs
+
+Commands that draw a full-screen UI need a real terminal.  Mark them
+with `:bb-transient/terminal true`, on the fn or in the task map:
+
+```clojure
+(defn top
+  {:bb-transient/terminal true}
+  [_] ...)
+```
+
+```clojure
+watch {:bb-transient/terminal true :exec-fn tasks/watch}
+```
+
+They run in an interactive [ghostel][ghostel] `ghostel-compile` buffer,
+which still ends up a compilation buffer (`g` reruns, `next-error`
+works) once the command exits.  Everything else runs in
+`compilation-mode` as usual.  `t` in an options menu toggles the
+terminal for one run, and a prefix argument (`C-u`) does the same for
+commands that run as soon as their key is pressed.  ghostel is only
+needed if you use this.
+
+[ghostel]: https://github.com/dakra/ghostel
+
 ## Development
 
 ```

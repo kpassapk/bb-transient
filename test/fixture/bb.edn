@@ -14,5 +14,10 @@
 
   table {:doc "A :cmd held in a var" :cmd cmds/table}
 
+  tui {:doc "Commands that want a terminal"
+       :cmd {"top" {:exec-fn cmds/top}
+             "watch" {:bb-transient/terminal true :exec-fn cmds/echo}
+             "plain" {:exec-fn cmds/deep}}}
+
   -hidden {:task (println "private by name")}
   secret {:private true :task (println "private by flag")}}}

@@ -30,11 +30,20 @@
 ;;
 ;; Results are cached per project and refreshed when bb.edn changes;
 ;; `g' in the top menu forces a refresh after editing a spec.
+;;
+;; Commands run in a `compilation-mode' buffer.  TUIs need a real
+;; terminal, so a command marked `:bb-transient/terminal true' (in its
+;; task map or on its :exec-fn's metadata) runs in an interactive
+;; `ghostel-compile' buffer instead.  `t' in an options menu, or a
+;; prefix argument on a bare leaf, flips the choice for one run.
 
 ;;; Code:
 
 (require 'compile)
 (require 'transient)
+
+(declare-function ghostel-compile "ghostel-compile" (command &optional interactive))
+(defvar ghostel-compile-buffer-name)
 
 (defgroup bb-transient nil
   "Transient menus for babashka tasks."
@@ -153,7 +162,8 @@ A node with children or options becomes a transient prefix; a bare
 leaf becomes a command that runs straight away."
   (let ((sym (bb-transient--sym root path))
         (children (alist-get 'children node))
-        (options (alist-get 'options node)))
+        (options (alist-get 'options node))
+        (terminal (alist-get 'terminal node)))
     (put sym 'bb-transient-root root)
     (put sym 'bb-transient-path path)
     (put sym 'bb-transient-options options)
@@ -161,7 +171,9 @@ leaf becomes a command that runs straight away."
      (children (bb-transient--define-menu sym root path node children))
      (options (bb-transient--define-leaf sym node options))
      (t (defalias sym
-          (lambda () (interactive) (bb-transient--run root path nil))
+          (lambda (&optional flip)
+            (interactive "P")
+            (bb-transient--run root path nil (xor terminal flip)))
           (alist-get 'doc node))))
     sym))
 
@@ -197,23 +209,27 @@ leaf becomes a command that runs straight away."
     (eval
      `(transient-define-prefix ,sym ()
         ,(or (alist-get 'doc node) heading)
+        ,@(when (alist-get 'terminal node) '(:value '("++terminal")))
         [,(concat heading
                   (when-let* ((doc (alist-get 'doc node)))
                     (concat "  " (propertize doc 'face 'transient-inactive-value))))
          ,@infixes
          ("-=" "Extra arguments" "++=" :prompt "Extra arguments: ")]
-        [("RET" "Run" bb-transient-run-current)])
+        [("RET" "Run" bb-transient-run-current)
+         ("t" "In a terminal" "++terminal")])
      t)))
 
 ;;;; Running
 
 (defun bb-transient--args (args)
   "Turn transient ARGS into a bb argument list.
-The `++=' extra-arguments value is split like a shell command line."
+The `++=' extra-arguments value is split like a shell command line,
+and the `++terminal' switch is dropped."
   (mapcan (lambda (a)
-            (if (string-prefix-p "++=" a)
-                (split-string-shell-command (substring a 3))
-              (list a)))
+            (cond ((equal a "++terminal") nil)
+                  ((string-prefix-p "++=" a)
+                   (split-string-shell-command (substring a 3)))
+                  (t (list a))))
           args))
 
 (defun bb-transient--missing (options args)
@@ -240,26 +256,36 @@ The `++=' extra-arguments value is split like a shell command line."
              (append (list bb-transient-program) path args)
              " "))
 
-(defun bb-transient--run (root path args)
-  "Run bb PATH with ARGS from ROOT in a compilation buffer."
-  (let* ((default-directory root)
-         (command (bb-transient--command path args))
-         (compilation-buffer-name-function
-          (lambda (_mode) (format "*bb %s*" (string-join path " ")))))
-    (compile command bb-transient-use-comint)))
+(defun bb-transient--run (root path args &optional terminal)
+  "Run bb PATH with ARGS from ROOT and return the output buffer.
+It is a compilation buffer, or with TERMINAL an interactive
+`ghostel-compile' buffer, so TUIs get a real terminal."
+  (let ((default-directory root)
+        (command (bb-transient--command path args))
+        (name (format "*bb %s*" (string-join path " "))))
+    (if terminal
+        (progn
+          (unless (require 'ghostel-compile nil t)
+            (user-error "Running in a terminal needs the ghostel package"))
+          (let ((ghostel-compile-buffer-name name))
+            (ghostel-compile command t)))
+      (let ((compilation-buffer-name-function (lambda (_mode) name)))
+        (compile command bb-transient-use-comint)))))
 
 (transient-define-suffix bb-transient-run-current ()
   "Run the command the current menu describes."
   (interactive)
   (let* ((sym transient-current-command)
-         (args (bb-transient--args (transient-args sym)))
+         (raw (transient-args sym))
+         (args (bb-transient--args raw))
          (missing (bb-transient--missing (get sym 'bb-transient-options) args)))
     (when missing
       (user-error "Required: %s"
                   (mapconcat (lambda (n) (concat "--" n)) missing ", ")))
     (bb-transient--run (get sym 'bb-transient-root)
                        (get sym 'bb-transient-path)
-                       args)))
+                       args
+                       (member "++terminal" raw))))
 
 ;;;; Entry points
 

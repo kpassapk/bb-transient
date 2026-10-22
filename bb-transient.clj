@@ -9,6 +9,8 @@
 ;;                             "options": [{"name": "title", ...}]}]}]}
 ;;
 ;; A node has either "children" (a :cmd table) or "options" (a leaf).
+;; A leaf marked `:bb-transient/terminal true', in its task map or on
+;; its :exec-fn's metadata, also carries "terminal": true.
 
 (ns bb-transient.introspect
   (:require [babashka.classpath :as cp]
@@ -66,6 +68,9 @@
                         (throw (ex-info (str "Unable to resolve " x) {})))
         :else (throw (ex-info (str "Not a symbol or var: " (pr-str x)) {}))))
 
+(defn- terminal? [& maps]
+  (boolean (some :bb-transient/terminal maps)))
+
 (defn- leaf [nm doc {:keys [exec-fn] :as task}]
   (let [[v err] (try [(resolve-var exec-fn) nil]
                      (catch Exception e [nil (ex-message e)]))
@@ -75,6 +80,7 @@
     (cond-> {:name nm
              :doc (or doc (summary (:doc m)))
              :options (mapv option spec)}
+      (terminal? task m) (assoc :terminal true)
       err (assoc :error err))))
 
 (defn- cmd-table
@@ -95,7 +101,8 @@
                                     :children (mapv (fn [[k c]] (node root k c)) cmd)}
                              err (assoc :error err)))
             (:exec-fn v) (leaf nm (:doc v) v)
-            :else        {:name nm :doc (:doc v) :options []})))))
+            :else        (cond-> {:name nm :doc (:doc v) :options []}
+                           (terminal? v) (assoc :terminal true)))))))
 
 (defn- public-task? [[k v]]
   (and (symbol? k)
