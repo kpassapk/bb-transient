@@ -240,7 +240,7 @@ bb.edn, so the hook is a function in a cljbang file:
 
   (defn open-book [{:keys [exit out]}]
     (when (zero? exit)
-      (let [dir (last (str/split-lines out))]
+      (let [dir (-> out str/trim str/split-lines last)]
         (doseq [f (el/directory-files-recursively dir "\\`task\\.org\\'")]
           (el/find-file-noselect f))
         (el/find-file (el/expand-file-name "workbook.org" dir)))))
@@ -324,14 +324,14 @@ In a task map it doesn't.
 :BASE:     main
 :END:
 
-** TODO =bb-transient.clj=
+** DONE =bb-transient.clj=
 
 Read =:bb-transient/before= and =:bb-transient/after= from the task map
 and from the =:exec-fn= metadata, letting the task map win.  Do it for
 =:exec-fn= leaves and for plain tasks.  Read top-level
 =:bb-transient/cljbang-paths= and send it once, next to ="tasks"=.
 
-** TODO =bb-transient.el=
+** DONE =bb-transient.el=
 
 - Put =before=, =after= and the cljbang paths on each command symbol,
   as is done for =bb-transient-defaults=.
@@ -344,7 +344,7 @@ and from the =:exec-fn= metadata, letting the task map win.  Do it for
 - =bb-transient--has-defaults= becomes =--has-forms=, and also checks
   for hooks.
 
-** TODO Tests
+** DONE Tests
 
 Fixture tasks for:
 - a =before= that rewrites the args
@@ -354,7 +354,12 @@ Fixture tasks for:
 
 Wait for the process with =accept-process-output=.
 
-** TODO README
+=CLJBANG=~/src/github.com/kpassapk/cljbang.el bb test=: 31 pass; 8
+skip without =CLJBANG=.  The plain-task hook is on a top-level task
+(=noted=), since bb doesn't run a =:task= inside a =:cmd= table.  A
+thrown =ex-info= is shown by its message, for defaults too.
+
+** DONE README
 
 Add a "Hooks" section after "Defaults from point".
 
@@ -368,7 +373,7 @@ Add a "Hooks" section after "Defaults from point".
 
 Needs the bb-transient hooks task above landed first.
 
-** TODO =emacs/forge/hooks.clj= and the metadata on =work/start=
+** DONE =emacs/forge/hooks.clj= and the metadata on =work/start=
 
 Use the code from the use case.  Add =:bb-transient/cljbang-paths
 ["emacs"]= to bb.edn.

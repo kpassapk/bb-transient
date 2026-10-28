@@ -18,6 +18,13 @@
 ;; an :exec-fn's metadata (quoted there, since metadata is evaluated)
 ;; replaces it for that leaf.  A leaf gets only the forms for options it
 ;; has, each as a string: "defaults": {"id": "(el/org-entry-get ...)"}.
+;;
+;; `:bb-transient/before' and `:bb-transient/after' name a hook Emacs
+;; runs around one command: a qualified symbol or an (fn ...) form, in
+;; the task map or (quoted) on the :exec-fn's metadata, the task map
+;; winning.  A node that has one carries it as a string:
+;; "before": "forge.hooks/save-book".  The top-level
+;; `:bb-transient/cljbang-paths' is sent once, next to "tasks".
 
 (ns bb-transient.introspect
   (:require [babashka.classpath :as cp]
@@ -78,6 +85,14 @@
 (defn- terminal? [& maps]
   (boolean (some :bb-transient/terminal maps)))
 
+(defn- hooks
+  "The hooks in MAPS (earlier ones win), as strings."
+  [& maps]
+  (into {}
+        (keep (fn [[k json-key]]
+                (when-let [form (some k maps)] [json-key (pr-str form)])))
+        {:bb-transient/before :before :bb-transient/after :after}))
+
 (defn- leaf-defaults
   "The forms in DEFAULTS and MAPS (later ones win) for SPEC's options."
   [spec defaults & maps]
@@ -95,9 +110,10 @@
         spec (concat (spec-entries (get-in m [:org.babashka/cli :spec]))
                      (spec-entries (get-in task [:org.babashka/cli :spec])))
         d (leaf-defaults spec defaults m task)]
-    (cond-> {:name nm
-             :doc (or doc (summary (:doc m)))
-             :options (mapv option spec)}
+    (cond-> (merge {:name nm
+                    :doc (or doc (summary (:doc m)))
+                    :options (mapv option spec)}
+                   (hooks task m))
       (terminal? task m) (assoc :terminal true)
       d (assoc :defaults d)
       err (assoc :error err))))
@@ -120,7 +136,8 @@
                                     :children (mapv (fn [[k c]] (node root defaults k c)) cmd)}
                              err (assoc :error err)))
             (:exec-fn v) (leaf defaults nm (:doc v) v)
-            :else        (cond-> {:name nm :doc (:doc v) :options []}
+            :else        (cond-> (merge {:name nm :doc (:doc v) :options []}
+                                           (hooks v))
                            (terminal? v) (assoc :terminal true)))))))
 
 (defn- public-task? [[k v]]
@@ -130,7 +147,10 @@
 
 (let [config (first *command-line-args*)
       root (str (fs/parent (fs/absolutize config)))
-      {:keys [tasks] defaults :bb-transient/defaults} (read-config config)]
+      {:keys [tasks]
+       defaults :bb-transient/defaults
+       paths :bb-transient/cljbang-paths} (read-config config)]
   (println (json/generate-string
-            {:tasks (mapv (fn [[k v]] (node root defaults k v))
-                          (filter public-task? tasks))})))
+            (cond-> {:tasks (mapv (fn [[k v]] (node root defaults k v))
+                                  (filter public-task? tasks))}
+              paths (assoc :cljbang-paths paths)))))

@@ -32,3 +32,11 @@
   {:bb-transient/terminal true}
   [_]
   (println "top"))
+
+(defn fail
+  "Prints, then exits 2"
+  {:bb-transient/after 'fixture.hooks/record
+   :org.babashka/cli {:spec {:msg {:desc "What to print"}}}}
+  [{:keys [msg]}]
+  (println msg)
+  (System/exit 2))

@@ -30,7 +30,7 @@
 (ert-deftest bb-transient-test-tree-order-and-privacy ()
   (let ((tree (bb-transient-tasks bb-transient-test--fixture t)))
     (should (equal (mapcar (lambda (n) (alist-get 'name n)) tree)
-                   '("zeta" "greet" "echo" "broken" "table" "tui")))))
+                   '("zeta" "greet" "echo" "broken" "table" "tui" "hooks" "noted")))))
 
 (ert-deftest bb-transient-test-tree-specs ()
   (let* ((tree (bb-transient-tasks bb-transient-test--fixture t))
@@ -302,6 +302,82 @@
               (should (file-equal-p default-directory bb-transient-test--fixture)))
             (kill-buffer buf)))
       (delete-directory other t))))
+
+;;;; Hooks
+
+(defvar bb-transient-test--after nil
+  "What fixture.hooks/record last saw.")
+
+(ert-deftest bb-transient-test-tree-hooks ()
+  (bb-transient-tasks bb-transient-test--fixture t)
+  ;; In the task map, and quoted on the :exec-fn's metadata.
+  (should (equal (alist-get 'before (bb-transient-test--leaf '("hooks" "rewrite")))
+                 "(fn [{:keys [args]}] (conj args \"--b=added\"))"))
+  (should (equal (alist-get 'after (bb-transient-test--leaf '("hooks" "record")))
+                 "fixture.hooks/record"))
+  ;; A plain :task can have one too.
+  (should (equal (alist-get 'after (bb-transient-test--leaf '("noted")))
+                 "fixture.hooks/record"))
+  (should-not (alist-get 'before (bb-transient-test--leaf '("echo"))))
+  (should (equal (bb-transient--cljbang-paths bb-transient-test--fixture)
+                 (list (expand-file-name "emacs" bb-transient-test--fixture)))))
+
+(defun bb-transient-test--run-hooked (path args)
+  "Run fixture command PATH with ARGS and its hooks, as its menu would."
+  (let* ((root bb-transient-test--fixture)
+         (_ (bb-transient--setup root t))
+         (bb-transient-use-comint nil)
+         (default-directory root))
+    (bb-transient--run root path args nil
+                       (get (bb-transient--sym root path) 'bb-transient-hooks))))
+
+(ert-deftest bb-transient-test-before-rewrites-args ()
+  (skip-unless (require 'cljbang nil t))
+  (let* ((buf (bb-transient-test--run-hooked '("hooks" "rewrite") '("--a=x")))
+         (out (bb-transient-test--wait buf)))
+    (should (string-match-p ":b \"added\"" out))
+    (kill-buffer buf)))
+
+(ert-deftest bb-transient-test-before-cancels ()
+  (skip-unless (require 'cljbang nil t))
+  (should-not (bb-transient-test--run-hooked '("hooks" "refuse") nil))
+  (should-not (get-buffer "*bb hooks refuse*")))
+
+(ert-deftest bb-transient-test-after ()
+  (skip-unless (require 'cljbang nil t))
+  (setq bb-transient-test--after nil)
+  (with-temp-buffer
+    (rename-buffer "origin" t)
+    (let* ((buf (bb-transient-test--run-hooked '("hooks" "record") '("--msg=hi")))
+           (_ (bb-transient-test--wait buf))
+           (m bb-transient-test--after))
+      (should (hash-table-p m))
+      ;; Runs on failure too, in the buffer the menu was opened from.
+      (should (equal (gethash :exit m) 2))
+      (should (equal (gethash :out m) "hi\n"))
+      (should (eq (gethash :buffer m) buf))
+      (should (equal (gethash :args m) ["--msg=hi"]))
+      (should (equal (gethash :in m) (buffer-name)))
+      (kill-buffer buf))))
+
+(ert-deftest bb-transient-test-after-plain-task ()
+  (skip-unless (require 'cljbang nil t))
+  (setq bb-transient-test--after nil)
+  (let ((buf (bb-transient-test--run-hooked '("noted") nil)))
+    (bb-transient-test--wait buf)
+    (should (equal (gethash :exit bb-transient-test--after) 0))
+    (should (equal (gethash :out bb-transient-test--after) "noted\n"))
+    (kill-buffer buf)))
+
+(ert-deftest bb-transient-test-hooks-untrusted ()
+  (skip-unless (require 'cljbang nil t))
+  (setq bb-transient-test--after nil)
+  ;; The command still runs, without its hooks.
+  (let* ((bb-transient-eval-hooks nil)
+         (buf (bb-transient-test--run-hooked '("noted") nil)))
+    (should (string-match-p "^noted$" (bb-transient-test--wait buf)))
+    (should-not bb-transient-test--after)
+    (kill-buffer buf)))
 
 ;;;; Layers
 

@@ -180,6 +180,63 @@ E.g. from an Org entry's `:REPO:` property:
             (bb-transient-project-root))))
 ```
 
+## Hooks
+
+A command can run cljbang before it starts and after it exits.  E.g.
+after `work start`, open the new workbook it prints:
+
+```clojure
+(defn start
+  {:org.babashka/cli {...}
+   :bb-transient/before 'forge.hooks/save-book
+   :bb-transient/after  'forge.hooks/open-book}
+  [opts] ...)
+```
+
+```clojure
+;; emacs/forge/hooks.clj
+(ns forge.hooks
+  (:require [clojure.string :as str]))
+
+(defn save-book [_]
+  (el/save-some-buffers true)
+  nil)
+
+(defn open-book [{:keys [exit out]}]
+  (when (zero? exit)
+    (el/find-file (el/expand-file-name "workbook.org"
+                                       (-> out str/trim str/split-lines last)))))
+```
+
+and in bb.edn, where to find `forge.hooks`:
+
+```clojure
+{:bb-transient/cljbang-paths ["emacs"]
+ :tasks {...}}
+```
+
+- `:bb-transient/before` is called with `{:args [...] :dir "..."}` in
+  the buffer the menu was opened from, just before the command starts.
+  It returns new args, or `nil` to keep them.  If it throws, the
+  command doesn't run and the error is shown as a message.
+- `:bb-transient/after` is called with `{:exit 0 :out "..." :buffer
+  <output buffer> :args [...]}` when the process exits, failed or not,
+  in the original buffer if it is still live, otherwise in the output
+  buffer.  `:out` is what the command wrote, without compile's header
+  and footer; in a terminal it is the whole buffer.
+- `:args` are the strings bb gets, e.g. `"--book=sandboxes"`.
+- A hook is a qualified symbol, whose namespace is required from
+  `:bb-transient/cljbang-paths` (directories relative to the project),
+  or an `(fn ...)` form for a one-liner.
+- Hooks belong to one command, in its task map or, quoted, on its
+  `:exec-fn`'s metadata; the task map wins.  A plain `:task` can have
+  them too.
+- Only commands run from a menu get hooks, not `bb-transient-run`.
+- They're trusted like defaults (`bb-transient-eval-hooks`).  When a
+  project isn't trusted, or cljbang is missing, the command runs
+  without them.  `g` recompiles them and requires their namespaces
+  again.
+
 [cljbang]: https://github.com/kpassapk/cljbang.el
 
 ## Development

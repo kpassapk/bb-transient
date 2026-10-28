@@ -45,6 +45,12 @@
 ;; fills --id= in every options menu that has it, evaluated in the
 ;; buffer the menu was opened from.  This needs the cljbang package.
 ;;
+;; A command can have cljbang hooks too: `:bb-transient/before' runs
+;; just before it starts and may rewrite its arguments, and
+;; `:bb-transient/after' runs when it exits, with its exit code and
+;; output.  A hook is an (fn ...) form or a qualified symbol, whose
+;; namespace is required from bb.edn's `:bb-transient/cljbang-paths'.
+;;
 ;; A menu can show other projects' tasks too, a group per project:
 ;; each function in `bb-transient-layers-functions' names some.  Their
 ;; commands run from the current project with their own bb.edn as
@@ -57,6 +63,9 @@
 
 (declare-function ghostel-compile "ghostel-compile" (command &optional interactive))
 (declare-function cljbang-eval-string "cljbang" (s))
+(declare-function cljbang-require "cljbang" (ns &optional reload))
+(declare-function cljbang-ex-message "cljbang-core" (e))
+(defvar cljbang-load-path)
 (defvar ghostel-compile-buffer-name)
 
 (defgroup bb-transient nil
@@ -91,7 +100,8 @@ directory instead of its project's root, use
 
 (defcustom bb-transient-eval-hooks 'ask
   "Whether to evaluate a project's forms in Emacs.
-The forms are the `:bb-transient/defaults' in its bb.edn.  t
+The forms are the `:bb-transient/defaults' and the before and after
+hooks in its bb.edn.  t
 evaluates them, nil never does, and `ask' asks once per project and
 session."
   :type '(choice (const :tag "Always" t)
@@ -116,7 +126,7 @@ Commands still run from the current project; see
 ;;;; Reading the command tree
 
 (defvar bb-transient--cache (make-hash-table :test #'equal)
-  "Project root -> (MTIME . TREE).")
+  "Project root -> (MTIME . RESULT), RESULT the parsed introspection.")
 
 (defun bb-transient-project-root (&optional directory)
   "The directory holding the nearest bb.edn at or above DIRECTORY, or signal.
@@ -134,7 +144,8 @@ DIRECTORY defaults to `default-directory'."
   (file-name-as-directory (expand-file-name (funcall bb-transient-project-function))))
 
 (defun bb-transient--introspect (root)
-  "Run the introspection script in ROOT and return the parsed tree."
+  "Run the introspection script in ROOT and return its parsed output.
+An alist of `tasks' and, if bb.edn has them, `cljbang-paths'."
   (let ((default-directory root)
         (config (expand-file-name "bb.edn" root))
         (stderr (make-temp-file "bb-transient-err")))
@@ -151,10 +162,22 @@ DIRECTORY defaults to `default-directory'."
             ;; Namespaces may print as they load; the JSON is the last line.
             (goto-char (point-max))
             (forward-line -1)
-            (alist-get 'tasks
-                       (json-parse-buffer :object-type 'alist :array-type 'list
-                                          :null-object nil :false-object nil))))
+            (json-parse-buffer :object-type 'alist :array-type 'list
+                               :null-object nil :false-object nil)))
       (delete-file stderr))))
+
+(defun bb-transient--read (root &optional refresh)
+  "The introspection of the project in ROOT, cached until bb.edn changes.
+REFRESH reads it again regardless."
+  (let* ((root (file-name-as-directory (expand-file-name root)))
+         (mtime (file-attribute-modification-time
+                 (file-attributes (expand-file-name "bb.edn" root))))
+         (hit (gethash root bb-transient--cache)))
+    (if (and hit (not refresh) (equal (car hit) mtime))
+        (cdr hit)
+      (let ((result (bb-transient--introspect root)))
+        (puthash root (cons mtime result) bb-transient--cache)
+        result))))
 
 (defun bb-transient-tasks (root &optional refresh)
   "The bb tasks of the project in ROOT, as a list of nodes.
@@ -167,16 +190,15 @@ Cached until bb.edn changes, or REFRESH.  A node is an alist:
             name, desc, alias, require, default and boolean
   terminal  non-nil when it should run in a terminal
   defaults  for a leaf, an alist of option name to cljbang source
+  before    the cljbang source of its before hook, or nil
+  after     the same for its after hook
   error     why its :exec-fn or :cmd could not be resolved"
-  (let* ((root (file-name-as-directory (expand-file-name root)))
-         (mtime (file-attribute-modification-time
-                 (file-attributes (expand-file-name "bb.edn" root))))
-         (hit (gethash root bb-transient--cache)))
-    (if (and hit (not refresh) (equal (car hit) mtime))
-        (cdr hit)
-      (let ((tree (bb-transient--introspect root)))
-        (puthash root (cons mtime tree) bb-transient--cache)
-        tree))))
+  (alist-get 'tasks (bb-transient--read root refresh)))
+
+(defun bb-transient--cljbang-paths (root)
+  "ROOT's `:bb-transient/cljbang-paths', as absolute directories."
+  (mapcar (lambda (dir) (expand-file-name dir root))
+          (alist-get 'cljbang-paths (bb-transient--read root))))
 
 (define-obsolete-function-alias 'bb-transient--tree
   #'bb-transient-tasks "0.2.0")
@@ -241,13 +263,15 @@ leaf becomes a command that runs straight away."
     (put sym 'bb-transient-path path)
     (put sym 'bb-transient-options options)
     (put sym 'bb-transient-defaults (alist-get 'defaults node))
+    (put sym 'bb-transient-hooks (bb-transient--hooks root node))
     (cond
      (children (bb-transient--define-menu sym root path node children))
      (options (bb-transient--define-leaf sym node options))
      (t (defalias sym
           (lambda (&optional flip)
             (interactive "P")
-            (bb-transient--run root path nil (xor terminal flip)))
+            (bb-transient--run root path nil (xor terminal flip)
+                               (get sym 'bb-transient-hooks)))
           (alist-get 'doc node))))
     sym))
 
@@ -320,8 +344,15 @@ leaf becomes a command that runs straight away."
       (progn
         (unless (get 'bb-transient--cljbang-p 'warned)
           (put 'bb-transient--cljbang-p 'warned t)
-          (message "bb-transient: install cljbang to fill in options from bb.edn"))
+          (message "bb-transient: install cljbang to use the forms in bb.edn"))
         nil)))
+
+(defun bb-transient--error-message (err)
+  "ERR's message; for a cljbang throw, the thrown value's."
+  (if (eq (car err) 'cljbang-error)
+      (let ((x (cadr err)))
+        (or (cljbang-ex-message x) (format "%s" x)))
+    (error-message-string err)))
 
 (defun bb-transient--compile (source)
   "A function of no arguments evaluating cljbang SOURCE, cached."
@@ -329,11 +360,13 @@ leaf becomes a command that runs straight away."
       (puthash source (cljbang-eval-string (format "(fn [] %s)" source))
                bb-transient--compiled)))
 
-(defun bb-transient--has-defaults (tree)
-  "Non-nil when a leaf in TREE has `:bb-transient/defaults' forms."
+(defun bb-transient--has-forms (tree)
+  "Non-nil when a node in TREE has defaults or hooks to evaluate."
   (seq-some (lambda (node)
               (or (alist-get 'defaults node)
-                  (bb-transient--has-defaults (alist-get 'children node))))
+                  (alist-get 'before node)
+                  (alist-get 'after node)
+                  (bb-transient--has-forms (alist-get 'children node))))
             tree))
 
 (defun bb-transient--fill (root options defaults)
@@ -349,7 +382,7 @@ out; one that signals also gets a message."
               (value (condition-case err
                          (funcall (bb-transient--compile source))
                        (error (message "bb-transient: --%s: %s"
-                                       name (error-message-string err))
+                                       name (bb-transient--error-message err))
                               nil))))
          (cond ((or (null opt) (null value)) nil)
                ((alist-get 'boolean opt) (concat "--" name))
@@ -373,6 +406,85 @@ the menu is opened from, as transient keeps that buffer current."
           (append (seq-remove (lambda (a) (member (car (split-string a "=")) names))
                               value)
                   filled))))
+
+;;;; Hooks
+
+(defvar bb-transient--required (make-hash-table :test #'equal)
+  "Hook namespaces required since the last refresh.")
+
+(defun bb-transient--hooks (root node)
+  "NODE's hooks from ROOT's bb.edn, an alist, or nil if it has none.
+The keys are `before' and `after', each cljbang source, and `paths',
+the directories to add to `cljbang-load-path' while one runs."
+  (when (or (alist-get 'before node) (alist-get 'after node))
+    `((root . ,root)
+      (before . ,(alist-get 'before node))
+      (after . ,(alist-get 'after node))
+      (paths . ,(bb-transient--cljbang-paths root)))))
+
+(defun bb-transient--hook-fn (source)
+  "A function of one argument for hook SOURCE, compiled once.
+SOURCE is an (fn ...) form, or a qualified symbol whose namespace is
+first required from `cljbang-load-path'."
+  (if (string-prefix-p "(" source)
+      (funcall (bb-transient--compile source))
+    (when-let* ((slash (string-search "/" source)))
+      (let ((ns (substring source 0 slash)))
+        (unless (gethash ns bb-transient--required)
+          ;; Reload, so `g' picks up an edited hook file.
+          (cljbang-require ns t)
+          (puthash ns t bb-transient--required))))
+    (funcall (bb-transient--compile (format "(fn [m] (%s m))" source)))))
+
+(defun bb-transient--call-hook (hooks key arg)
+  "Call the KEY hook in HOOKS with ARG, a plist made into a map.
+Its value, or nil when there is no such hook.  The map is a hash table
+keyed by keywords, as cljbang's own maps are."
+  (when-let* ((source (alist-get key hooks)))
+    (let ((m (make-hash-table :test #'eq))
+          (cljbang-load-path (append (alist-get 'paths hooks) cljbang-load-path)))
+      (while arg
+        (puthash (pop arg) (pop arg) m))
+      (funcall (bb-transient--hook-fn source) m))))
+
+(defun bb-transient--usable-hooks (hooks path)
+  "HOOKS, or nil with a message when they can't run for bb PATH."
+  (when hooks
+    (if (and (require 'cljbang nil t)
+             (bb-transient--trusted-p (alist-get 'root hooks)))
+        hooks
+      (message "bb-transient: running bb %s without its hooks (%s)"
+               (string-join path " ")
+               (if (featurep 'cljbang) "not trusted" "no cljbang"))
+      nil)))
+
+(defun bb-transient--watch (buf start args hooks origin)
+  "Call the after hook in HOOKS when BUF's process exits.
+The output starts at START and ends at the process mark, before
+compile's footer; nil START means all of BUF's text.  ARGS are the
+command's arguments.  The hook runs in ORIGIN, or in BUF once ORIGIN
+is gone."
+  (let ((proc (get-buffer-process buf)))
+    (if (not proc)
+        (message "bb-transient: no process in %s for the after hook" (buffer-name buf))
+      (add-function
+       :after (process-sentinel proc)
+       (lambda (proc _event)
+         (unless (process-live-p proc)
+           (let ((out (with-current-buffer buf
+                        (if start
+                            (buffer-substring-no-properties
+                             (min start (point-max))
+                             (or (marker-position (process-mark proc)) (point-max)))
+                          (buffer-substring-no-properties (point-min) (point-max))))))
+             (with-current-buffer (if (buffer-live-p origin) origin buf)
+               (condition-case err
+                   (bb-transient--call-hook
+                    hooks 'after (list :exit (process-exit-status proc)
+                                       :out out :buffer buf
+                                       :args (vconcat args)))
+                 (error (message "bb-transient: after hook: %s"
+                                 (bb-transient--error-message err))))))))))))
 
 ;;;; Running
 
@@ -420,25 +532,48 @@ See `bb-transient-directory-function'; ROOT when it has no answer."
   (expand-file-name
    (or (ignore-errors (funcall bb-transient-directory-function)) root)))
 
-(defun bb-transient--run (root path args &optional terminal)
+(defun bb-transient--run (root path args &optional terminal hooks)
   "Run bb PATH with ARGS, using ROOT's bb.edn, and return the output buffer.
 It runs from `bb-transient--directory', passing ROOT's bb.edn as
 --config when that is not ROOT.  The buffer is a compilation buffer,
 or with TERMINAL an interactive `ghostel-compile' buffer, so TUIs get
-a real terminal."
-  (let* ((default-directory (bb-transient--directory root))
-         (config (unless (file-equal-p default-directory root)
-                   (expand-file-name "bb.edn" root)))
-         (command (bb-transient--command path args config))
-         (name (format "*bb %s*" (string-join path " "))))
-    (if terminal
-        (progn
-          (unless (require 'ghostel-compile nil t)
-            (user-error "Running in a terminal needs the ghostel package"))
-          (let ((ghostel-compile-buffer-name name))
-            (ghostel-compile command t)))
-      (let ((compilation-buffer-name-function (lambda (_mode) name)))
-        (compile command bb-transient-use-comint)))))
+a real terminal.
+
+HOOKS, from `bb-transient--hooks', are called here: before with the
+args and directory, which may return new args, and after once the
+process exits.  A before hook that signals cancels the run, and
+returns nil."
+  (let* ((hooks (bb-transient--usable-hooks hooks path))
+         (origin (current-buffer))
+         (default-directory (bb-transient--directory root))
+         (args (condition-case err
+                   (if-let* ((new (bb-transient--call-hook
+                                   hooks 'before (list :args (vconcat args)
+                                                       :dir default-directory))))
+                       (append new nil)
+                     args)
+                 (error (message "bb-transient: before hook, not running: %s"
+                                 (bb-transient--error-message err))
+                        'cancel))))
+    (unless (eq args 'cancel)
+      (let* ((config (unless (file-equal-p default-directory root)
+                       (expand-file-name "bb.edn" root)))
+             (command (bb-transient--command path args config))
+             (name (format "*bb %s*" (string-join path " ")))
+             (buf (if terminal
+                      (progn
+                        (unless (require 'ghostel-compile nil t)
+                          (user-error "Running in a terminal needs the ghostel package"))
+                        (let ((ghostel-compile-buffer-name name))
+                          (ghostel-compile command t)))
+                    (let ((compilation-buffer-name-function (lambda (_mode) name)))
+                      (compile command bb-transient-use-comint)))))
+        (when (alist-get 'after hooks)
+          ;; The process can't have written yet: its filter only runs
+          ;; once Emacs waits.  A terminal's output is its whole text.
+          (bb-transient--watch buf (unless terminal (with-current-buffer buf (point-max)))
+                               args hooks origin))
+        buf))))
 
 (defun bb-transient-run (path &optional args project terminal)
   "Run bb task PATH (a list of names) with ARGS and return its buffer.
@@ -460,7 +595,8 @@ a compilation buffer, or with TERMINAL a `ghostel-compile' one."
     (bb-transient--run (get sym 'bb-transient-root)
                        (get sym 'bb-transient-path)
                        args
-                       (member "++terminal" raw))))
+                       (member "++terminal" raw)
+                       (get sym 'bb-transient-hooks))))
 
 ;;;; Entry points
 
@@ -491,8 +627,10 @@ The last is ROOT, labelled by its directory name unless a function in
 A group per layer, outermost first.  Keys go to the innermost layer
 first, so ROOT's tasks get the letters of their names.  A layer whose
 tasks can't be read is left out, unless it is ROOT.  REFRESH also
-recompiles the forms in `:bb-transient/defaults'."
-  (when refresh (clrhash bb-transient--compiled))
+recompiles the defaults and hooks, and requires hook namespaces again."
+  (when refresh
+    (clrhash bb-transient--compiled)
+    (clrhash bb-transient--required))
   (let* ((root (file-name-as-directory (expand-file-name root)))
          (layers (bb-transient--layers root))
          (sym (intern (format "bb-transient:%s"
@@ -509,7 +647,7 @@ recompiles the forms in `:bb-transient/defaults'."
                                    nil)))))
         (let ((tree (seq-remove (lambda (n) (member (alist-get 'name n) seen)) tree)))
           ;; Ask now, not while a menu is up.
-          (when (and (bb-transient--has-defaults tree) (bb-transient--cljbang-p))
+          (when (and (bb-transient--has-forms tree) (bb-transient--cljbang-p))
             (bb-transient--trusted-p dir))
           (setq seen (append seen (mapcar (lambda (n) (alist-get 'name n)) tree)))
           (push (vconcat

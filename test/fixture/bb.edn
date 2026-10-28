@@ -1,4 +1,5 @@
 {:paths ["bb"]
+ :bb-transient/cljbang-paths ["emacs"]
  :bb-transient/defaults {:a (el/org-entry-get nil "ID" true)
                          :b (el/error "Boom")
                          :name (el/buffer-name)}
@@ -23,6 +24,17 @@
                     :bb-transient/defaults {:a (el/buffer-name)}
                     :exec-fn cmds/echo}
              "plain" {:exec-fn cmds/deep}}}
+
+  hooks {:doc "Commands with before and after hooks"
+         :cmd {"rewrite" {:exec-fn cmds/echo
+                          :bb-transient/before (fn [{:keys [args]}] (conj args "--b=added"))}
+               "refuse" {:exec-fn cmds/echo
+                         :bb-transient/before (fn [_] (throw (ex-info "Not today" {})))}
+               "record" {:exec-fn cmds/fail}}}
+
+  noted {:doc "A plain task with a hook"
+         :task (println "noted")
+         :bb-transient/after fixture.hooks/record}
 
   -hidden {:task (println "private by name")}
   secret {:private true :task (println "private by flag")}}}
