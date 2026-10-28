@@ -125,6 +125,63 @@ project root by default); `(lambda () default-directory)` runs them from
 the buffer's directory instead.  From Lisp, `bb-transient-run` runs a task
 without the menu and `bb-transient-tasks` returns a project's task tree.
 
+## Defaults from point
+
+An options menu can open with options already filled in from where
+point is.  `:bb-transient/defaults` in bb.edn maps option names to
+[cljbang][cljbang] forms, evaluated in the buffer the menu was opened
+from:
+
+```clojure
+{:paths ["src"]
+ :bb-transient/defaults
+ {:id   (el/org-entry-get nil "ID" true)
+  :book (some->> (el/buffer-file-name)
+                 (re-find (re-pattern "--\\([^/_.]+\\)"))
+                 second)}
+ :tasks {...}}
+```
+
+- A key fills that option in every command from this bb.edn that has
+  it, and is ignored by the rest.  Other projects' commands in the same
+  menu (see Layers) use their own bb.edn's.
+- The same key in a task map, or quoted on an `:exec-fn`'s metadata
+  (`{:bb-transient/defaults {:id '(...)}}`), wins for that command.
+- `nil` leaves the option blank; an error does too, with a message.  A
+  non-nil result turns a boolean option on.
+- A filled value replaces the one transient remembers from the last
+  run, and counts for "(required)".
+- Forms run inside Emacs.  `bb-transient-eval-hooks` is `ask` (once per
+  project and session) by default; `t` or `nil` to always or never.
+- Without cljbang, defaults are skipped with a message.
+
+bb reads bb.edn too, which limits what a form can say:
+
+| Form           | In bb.edn                                          |
+|----------------|----------------------------------------------------|
+| `(el/f ...)`   | fine                                               |
+| `'x`           | fine                                               |
+| `(fn [m] ...)` | fine                                               |
+| `#"..."`       | rejected by bb; use `re-pattern`, which takes Emacs regex syntax |
+| `#(...)`       | not cljbang either; use `fn`                       |
+
+A form longer than a couple of lines reads better in a cljbang file
+called from bb.edn.
+
+Which project's menu opens is up to `bb-transient-project-function`
+(the nearest bb.edn by default).  Commands run from that project too.
+E.g. from an Org entry's `:REPO:` property:
+
+```elisp
+(setq bb-transient-project-function
+      (lambda ()
+        (or (and (derived-mode-p 'org-mode)
+                 (clj! (some-> (el/org-entry-get nil "REPO" true) el/expand-file-name)))
+            (bb-transient-project-root))))
+```
+
+[cljbang]: https://github.com/kpassapk/cljbang.el
+
 ## Development
 
 ```
@@ -132,4 +189,5 @@ bb ci      # byte-compile (warnings are errors), then the ERT suite
 ```
 
 The tests need `bb` on `PATH`; they introspect and run the project in
-`test/fixture`.
+`test/fixture`.  Set `CLJBANG` to cljbang's directory to run the
+defaults tests too; without it they skip.

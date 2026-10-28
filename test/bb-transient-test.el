@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'org)
 (require 'bb-transient)
 
 (defconst bb-transient-test--fixture
@@ -13,6 +14,9 @@
 (defconst bb-transient-test--outer
   (file-name-as-directory
    (expand-file-name "../outer" bb-transient-test--fixture)))
+
+;; The fixture's forms are ours; never prompt in batch.
+(setq bb-transient-eval-hooks t)
 
 (defun bb-transient-test--wait (buf)
   (while (get-buffer-process buf) (accept-process-output nil 0.1))
@@ -186,6 +190,118 @@
       (should (file-equal-p default-directory
                             (expand-file-name "bb/" bb-transient-test--fixture))))
     (kill-buffer buf)))
+
+;;;; Defaults from point
+
+(defmacro bb-transient-test--in-task (&rest body)
+  "Run BODY in an Org buffer whose entry has an :ID:."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (rename-buffer "task.org" t)
+     (org-mode)
+     (insert "* Task\n:PROPERTIES:\n:ID:       ABC-123\n:END:\n** Sub\n")
+     (let ((bb-transient-eval-hooks t))
+       ,@body)))
+
+(defun bb-transient-test--leaf (path)
+  (let ((node (cons nil (list (cons 'children
+                                    (bb-transient-tasks bb-transient-test--fixture))))))
+    (dolist (name path node)
+      (setq node (bb-transient-test--find name (alist-get 'children node))))))
+
+(ert-deftest bb-transient-test-tree-defaults ()
+  (bb-transient-tasks bb-transient-test--fixture t)
+  ;; bb.edn's forms, only for options the leaf has.
+  (should (equal (alist-get 'defaults (bb-transient-test--leaf '("echo")))
+                 '((a . "(el/org-entry-get nil \"ID\" true)")
+                   (b . "(el/error \"Boom\")"))))
+  ;; The :exec-fn's metadata adds to them, and the task map replaces them.
+  (should (equal (alist-get 'defaults (bb-transient-test--leaf '("greet" "hello")))
+                 '((name . "(el/buffer-name)")
+                   (loud . "(el/derived-mode-p (quote org-mode))"))))
+  (should (equal (alist-get 'a (alist-get 'defaults (bb-transient-test--leaf '("tui" "watch"))))
+                 "(el/buffer-name)"))
+  ;; No options, no defaults.
+  (should-not (alist-get 'defaults (bb-transient-test--leaf '("greet" "nested" "deep")))))
+
+(ert-deftest bb-transient-test-fill ()
+  (skip-unless (require 'cljbang nil t))
+  (bb-transient-tasks bb-transient-test--fixture t)
+  (bb-transient-test--in-task
+    (let ((echo (bb-transient-test--leaf '("echo")))
+          (hello (bb-transient-test--leaf '("greet" "hello"))))
+      ;; :ID: is inherited; the form that signals leaves --b out.
+      (should (equal (bb-transient--fill bb-transient-test--fixture
+                                         (alist-get 'options echo)
+                                         (alist-get 'defaults echo))
+                     '("--a=ABC-123")))
+      ;; A switch is set when its form is non-nil.
+      (should (equal (bb-transient--fill bb-transient-test--fixture
+                                         (alist-get 'options hello)
+                                         (alist-get 'defaults hello))
+                     (list (concat "--name=" (buffer-name)) "--loud")))
+      (fundamental-mode)
+      (should (equal (bb-transient--fill bb-transient-test--fixture
+                                         (alist-get 'options hello)
+                                         (alist-get 'defaults hello))
+                     (list (concat "--name=" (buffer-name))))))))
+
+(ert-deftest bb-transient-test-fill-eval-hooks ()
+  (skip-unless (require 'cljbang nil t))
+  (bb-transient-tasks bb-transient-test--fixture t)
+  (bb-transient-test--in-task
+    (let* ((echo (bb-transient-test--leaf '("echo")))
+           (fill (lambda ()
+                   (bb-transient--fill bb-transient-test--fixture
+                                       (alist-get 'options echo)
+                                       (alist-get 'defaults echo))))
+           (asked 0))
+      (let ((bb-transient-eval-hooks nil))
+        (should-not (funcall fill)))
+      ;; `ask' asks once per project.
+      (let ((bb-transient-eval-hooks 'ask)
+            (bb-transient--trust (make-hash-table :test #'equal)))
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) (cl-incf asked) nil)))
+          (should-not (funcall fill))
+          (should-not (funcall fill))
+          (should (= asked 1)))))))
+
+(ert-deftest bb-transient-test-init-value ()
+  (skip-unless (require 'cljbang nil t))
+  (let* ((root bb-transient-test--fixture)
+         (_ (bb-transient--setup root t))
+         (echo (bb-transient--sym root '("echo")))
+         (watch (bb-transient--sym root '("tui" "watch")))
+         (value (lambda (sym)
+                  (let ((obj (clone (get sym 'transient--prefix))))
+                    (bb-transient--init-value obj)
+                    (oref obj value)))))
+    (bb-transient-test--in-task
+      (goto-char (point-max))
+      ;; The filled value replaces a saved one; other saved args stay.
+      (let ((transient-values `((,echo "--a=old" "--b=kept"))))
+        (should (equal (funcall value echo) '("--b=kept" "--a=ABC-123"))))
+      ;; The terminal preset stays.
+      (should (equal (funcall value watch)
+                     (list "++terminal" (concat "--a=" (buffer-name))))))))
+
+(ert-deftest bb-transient-test-project-function ()
+  (let* ((bb-transient-use-comint nil)
+         (other (file-name-as-directory (make-temp-file "bb-transient-other" t)))
+         (default-directory other)
+         (bb-transient-project-function (lambda () bb-transient-test--fixture)))
+    (unwind-protect
+        (progn
+          (should (file-equal-p (bb-transient-project) bb-transient-test--fixture))
+          ;; Commands run from that project too, with no bb.edn here.
+          (let* ((buf (bb-transient-run '("greet" "hello") '("--name=ert")))
+                 (out (bb-transient-test--wait buf)))
+            (should-not (string-match-p "--config" out))
+            (should (string-match-p "hello ert" out))
+            (with-current-buffer buf
+              (should (file-equal-p default-directory bb-transient-test--fixture)))
+            (kill-buffer buf)))
+      (delete-directory other t))))
 
 ;;;; Layers
 

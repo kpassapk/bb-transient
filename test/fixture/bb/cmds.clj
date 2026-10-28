@@ -3,7 +3,8 @@
 (defn hello
   "Say hello
   to someone"
-  {:org.babashka/cli {:spec {:name {:desc "Who to greet" :alias :n :require true}
+  {:bb-transient/defaults {:loud '(el/derived-mode-p 'org-mode)}
+   :org.babashka/cli {:spec {:name {:desc "Who to greet" :alias :n :require true}
                              :loud {:desc "Shout" :coerce :boolean}
                              :times {:desc "Repeat count" :default 1}}}}
   [{:keys [name loud times]}]
@@ -12,6 +13,7 @@
 
 (defn deep
   "No options"
+  {:bb-transient/defaults {:a '(el/buffer-name)}}
   [_]
   (println "deep"))
 

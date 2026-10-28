@@ -1,12 +1,15 @@
 {:root/parent "kpassapk/root"
  :paths ["user"]
  :tasks
- {:init (def emacs (or (System/getenv "EMACS") "emacs"))
+ {:init (do (def emacs (or (System/getenv "EMACS") "emacs"))
+            ;; cljbang's directory; without it the cljbang tests skip
+            (def cljbang (System/getenv "CLJBANG")))
 
-  test {:doc "Run the ERT suite"
-        :task (shell emacs "--batch" "-L" "." "-L" "test"
-                     "-l" "ert" "-l" "test/bb-transient-test.el"
-                     "-f" "ert-run-tests-batch-and-exit")}
+  test {:doc "Run the ERT suite (set CLJBANG to cljbang's directory to test defaults)"
+        :task (apply shell emacs "--batch" "-L" "." "-L" "test"
+                     (concat (when cljbang ["-L" cljbang])
+                             ["-l" "ert" "-l" "test/bb-transient-test.el"
+                              "-f" "ert-run-tests-batch-and-exit"]))}
 
   compile {:doc "Byte-compile"
            :task (shell emacs "--batch" "-L" "."

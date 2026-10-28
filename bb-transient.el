@@ -37,6 +37,14 @@
 ;; `ghostel-compile' buffer instead.  `t' in an options menu, or a
 ;; prefix argument on a bare leaf, flips the choice for one run.
 ;;
+;; An option can be filled in from where point is.  bb.edn's
+;; `:bb-transient/defaults' maps option names to cljbang forms:
+;;
+;;   :bb-transient/defaults {:id (el/org-entry-get nil "ID" true)}
+;;
+;; fills --id= in every options menu that has it, evaluated in the
+;; buffer the menu was opened from.  This needs the cljbang package.
+;;
 ;; A menu can show other projects' tasks too, a group per project:
 ;; each function in `bb-transient-layers-functions' names some.  Their
 ;; commands run from the current project with their own bb.edn as
@@ -48,6 +56,7 @@
 (require 'transient)
 
 (declare-function ghostel-compile "ghostel-compile" (command &optional interactive))
+(declare-function cljbang-eval-string "cljbang" (s))
 (defvar ghostel-compile-buffer-name)
 
 (defgroup bb-transient nil
@@ -64,7 +73,14 @@
 The buffer is still a `compilation-mode' buffer either way."
   :type 'boolean)
 
-(defcustom bb-transient-directory-function #'bb-transient-project-root
+(defcustom bb-transient-project-function #'bb-transient-project-root
+  "Function returning the directory of the project whose menu to show.
+It is called with no arguments in the buffer the menu is opened from.
+Set it to pick a project some other way than the nearest bb.edn, such
+as from an Org property."
+  :type 'function)
+
+(defcustom bb-transient-directory-function #'bb-transient-project
   "Function returning the directory commands run from.
 It is called with no arguments in the buffer the menu was opened
 from.  When the result isn't the project a command comes from, that
@@ -72,6 +88,15 @@ project's bb.edn is passed as --config.  To run from the buffer's own
 directory instead of its project's root, use
 \=(lambda () default-directory)."
   :type 'function)
+
+(defcustom bb-transient-eval-hooks 'ask
+  "Whether to evaluate a project's forms in Emacs.
+The forms are the `:bb-transient/defaults' in its bb.edn.  t
+evaluates them, nil never does, and `ask' asks once per project and
+session."
+  :type '(choice (const :tag "Always" t)
+                 (const :tag "Never" nil)
+                 (const :tag "Ask once per project" ask)))
 
 (defvar bb-transient-layers-functions nil
   "Functions naming other projects to show in the menu.
@@ -103,6 +128,10 @@ DIRECTORY defaults to `default-directory'."
 
 (define-obsolete-function-alias 'bb-transient--root
   #'bb-transient-project-root "0.2.0")
+
+(defun bb-transient-project ()
+  "The current project's directory, from `bb-transient-project-function'."
+  (file-name-as-directory (expand-file-name (funcall bb-transient-project-function))))
 
 (defun bb-transient--introspect (root)
   "Run the introspection script in ROOT and return the parsed tree."
@@ -137,6 +166,7 @@ Cached until bb.edn changes, or REFRESH.  A node is an alist:
   options   for a leaf, its babashka.cli options, each an alist of
             name, desc, alias, require, default and boolean
   terminal  non-nil when it should run in a terminal
+  defaults  for a leaf, an alist of option name to cljbang source
   error     why its :exec-fn or :cmd could not be resolved"
   (let* ((root (file-name-as-directory (expand-file-name root)))
          (mtime (file-attribute-modification-time
@@ -210,6 +240,7 @@ leaf becomes a command that runs straight away."
     (put sym 'bb-transient-root root)
     (put sym 'bb-transient-path path)
     (put sym 'bb-transient-options options)
+    (put sym 'bb-transient-defaults (alist-get 'defaults node))
     (cond
      (children (bb-transient--define-menu sym root path node children))
      (options (bb-transient--define-leaf sym node options))
@@ -251,6 +282,7 @@ leaf becomes a command that runs straight away."
      `(transient-define-prefix ,sym ()
         ,(or (alist-get 'doc node) heading)
         ,@(when (alist-get 'terminal node) '(:value '("++terminal")))
+        :init-value #'bb-transient--init-value
         [,(concat heading
                   (when-let* ((doc (alist-get 'doc node)))
                     (concat "  " (propertize doc 'face 'transient-inactive-value))))
@@ -259,6 +291,88 @@ leaf becomes a command that runs straight away."
         [("RET" "Run" bb-transient-run-current)
          ("t" "In a terminal" "++terminal")])
      t)))
+
+;;;; Filling in options
+
+(defvar bb-transient--trust (make-hash-table :test #'equal)
+  "Project root -> t or `no', answers to `bb-transient-eval-hooks' `ask'.")
+
+(defvar bb-transient--compiled (make-hash-table :test #'equal)
+  "Cljbang source -> a function of no arguments evaluating it.")
+
+(defun bb-transient--trusted-p (root)
+  "Whether ROOT's forms may be evaluated, asking if need be."
+  (pcase bb-transient-eval-hooks
+    ('nil nil)
+    ('ask (let ((answer (or (gethash root bb-transient--trust)
+                            (puthash root
+                                     (if (y-or-n-p (format "Evaluate the Lisp in %sbb.edn? "
+                                                           (abbreviate-file-name root)))
+                                         t
+                                       'no)
+                                     bb-transient--trust))))
+            (eq answer t)))
+    (_ t)))
+
+(defun bb-transient--cljbang-p ()
+  "Non-nil when cljbang is loaded; otherwise say so, once."
+  (or (require 'cljbang nil t)
+      (progn
+        (unless (get 'bb-transient--cljbang-p 'warned)
+          (put 'bb-transient--cljbang-p 'warned t)
+          (message "bb-transient: install cljbang to fill in options from bb.edn"))
+        nil)))
+
+(defun bb-transient--compile (source)
+  "A function of no arguments evaluating cljbang SOURCE, cached."
+  (or (gethash source bb-transient--compiled)
+      (puthash source (cljbang-eval-string (format "(fn [] %s)" source))
+               bb-transient--compiled)))
+
+(defun bb-transient--has-defaults (tree)
+  "Non-nil when a leaf in TREE has `:bb-transient/defaults' forms."
+  (seq-some (lambda (node)
+              (or (alist-get 'defaults node)
+                  (bb-transient--has-defaults (alist-get 'children node))))
+            tree))
+
+(defun bb-transient--fill (root options defaults)
+  "Arguments for OPTIONS filled in by DEFAULTS, evaluated here.
+DEFAULTS is a leaf's alist of option name to cljbang source from
+ROOT's bb.edn.  An option whose form returns nil or signals is left
+out; one that signals also gets a message."
+  (when (and defaults (bb-transient--cljbang-p) (bb-transient--trusted-p root))
+    (seq-keep
+     (pcase-lambda (`(,name . ,source))
+       (let* ((name (symbol-name name))
+              (opt (seq-find (lambda (o) (equal (alist-get 'name o) name)) options))
+              (value (condition-case err
+                         (funcall (bb-transient--compile source))
+                       (error (message "bb-transient: --%s: %s"
+                                       name (error-message-string err))
+                              nil))))
+         (cond ((or (null opt) (null value)) nil)
+               ((alist-get 'boolean opt) (concat "--" name))
+               (t (format "--%s=%s" name value)))))
+     defaults)))
+
+(defun bb-transient--init-value (obj)
+  "Set options menu OBJ's value: the usual one, with options filled in.
+A filled-in option replaces the value transient set or saved, since
+the menu should reflect where point is.  It is called in the buffer
+the menu is opened from, as transient keeps that buffer current."
+  (let* ((sym (oref obj command))
+         (value (if-let* ((saved (assq sym transient-values)))
+                    (cdr saved)
+                  (transient-default-value obj)))
+         (filled (bb-transient--fill (get sym 'bb-transient-root)
+                                     (get sym 'bb-transient-options)
+                                     (get sym 'bb-transient-defaults)))
+         (names (mapcar (lambda (a) (car (split-string a "="))) filled)))
+    (oset obj value
+          (append (seq-remove (lambda (a) (member (car (split-string a "=")) names))
+                              value)
+                  filled))))
 
 ;;;; Running
 
@@ -331,7 +445,7 @@ a real terminal."
 PROJECT is the directory whose bb.edn defines the task; nil means the
 current project.  It runs from `bb-transient-directory-function', in
 a compilation buffer, or with TERMINAL a `ghostel-compile' one."
-  (bb-transient--run (or project (bb-transient-project-root)) path args terminal))
+  (bb-transient--run (or project (bb-transient-project)) path args terminal))
 
 (transient-define-suffix bb-transient-run-current ()
   "Run the command the current menu describes."
@@ -376,7 +490,9 @@ The last is ROOT, labelled by its directory name unless a function in
   "Define the top menu for ROOT and its layers, and return its symbol.
 A group per layer, outermost first.  Keys go to the innermost layer
 first, so ROOT's tasks get the letters of their names.  A layer whose
-tasks can't be read is left out, unless it is ROOT."
+tasks can't be read is left out, unless it is ROOT.  REFRESH also
+recompiles the forms in `:bb-transient/defaults'."
+  (when refresh (clrhash bb-transient--compiled))
   (let* ((root (file-name-as-directory (expand-file-name root)))
          (layers (bb-transient--layers root))
          (sym (intern (format "bb-transient:%s"
@@ -392,6 +508,9 @@ tasks can't be read is left out, unless it is ROOT."
                                             label (error-message-string err))
                                    nil)))))
         (let ((tree (seq-remove (lambda (n) (member (alist-get 'name n) seen)) tree)))
+          ;; Ask now, not while a menu is up.
+          (when (and (bb-transient--has-defaults tree) (bb-transient--cljbang-p))
+            (bb-transient--trusted-p dir))
           (setq seen (append seen (mapcar (lambda (n) (alist-get 'name n)) tree)))
           (push (vconcat
                  (list (if (cdr layers) label "bb tasks"))
@@ -417,15 +536,16 @@ tasks can't be read is left out, unless it is ROOT."
   "Re-read bb.edn and the task specs, then reopen the menu."
   (interactive)
   (let ((root (or (get transient-current-command 'bb-transient-root)
-                  (bb-transient-project-root))))
+                  (bb-transient-project))))
     (transient-setup (bb-transient--setup root t))))
 
 ;;;###autoload
 (defun bb-transient ()
   "Open a transient menu of the bb tasks in the current project.
+The project is the one `bb-transient-project-function' returns.
 Projects named by `bb-transient-layers-functions' get groups too."
   (interactive)
-  (transient-setup (bb-transient--setup (bb-transient-project-root))))
+  (transient-setup (bb-transient--setup (bb-transient-project))))
 
 (provide 'bb-transient)
 ;;; bb-transient.el ends here

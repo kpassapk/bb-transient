@@ -11,6 +11,13 @@
 ;; A node has either "children" (a :cmd table) or "options" (a leaf).
 ;; A leaf marked `:bb-transient/terminal true', in its task map or on
 ;; its :exec-fn's metadata, also carries "terminal": true.
+;;
+;; `:bb-transient/defaults' maps option names to cljbang forms that
+;; Emacs evaluates to fill those options in.  The top-level one in
+;; bb.edn covers every leaf with that option; one in a task map or on
+;; an :exec-fn's metadata (quoted there, since metadata is evaluated)
+;; replaces it for that leaf.  A leaf gets only the forms for options it
+;; has, each as a string: "defaults": {"id": "(el/org-entry-get ...)"}.
 
 (ns bb-transient.introspect
   (:require [babashka.classpath :as cp]
@@ -71,16 +78,28 @@
 (defn- terminal? [& maps]
   (boolean (some :bb-transient/terminal maps)))
 
-(defn- leaf [nm doc {:keys [exec-fn] :as task}]
+(defn- leaf-defaults
+  "The forms in DEFAULTS and MAPS (later ones win) for SPEC's options."
+  [spec defaults & maps]
+  (let [names (set (map first spec))]
+    (not-empty
+     (into {}
+           (keep (fn [[k form]]
+                   (when (names (keyword k)) [(name k) (pr-str form)])))
+           (apply merge defaults (map :bb-transient/defaults maps))))))
+
+(defn- leaf [defaults nm doc {:keys [exec-fn] :as task}]
   (let [[v err] (try [(resolve-var exec-fn) nil]
                      (catch Exception e [nil (ex-message e)]))
         m (meta v)
         spec (concat (spec-entries (get-in m [:org.babashka/cli :spec]))
-                     (spec-entries (get-in task [:org.babashka/cli :spec])))]
+                     (spec-entries (get-in task [:org.babashka/cli :spec])))
+        d (leaf-defaults spec defaults m task)]
     (cond-> {:name nm
              :doc (or doc (summary (:doc m)))
              :options (mapv option spec)}
       (terminal? task m) (assoc :terminal true)
+      d (assoc :defaults d)
       err (assoc :error err))))
 
 (defn- cmd-table
@@ -88,7 +107,7 @@
   [cmd]
   (if (map? cmd) cmd @(resolve-var cmd)))
 
-(defn- node [root nm v]
+(defn- node [root defaults nm v]
   (let [nm (if (keyword? nm) (name nm) (str nm))]
     (if-not (map? v)
       {:name nm :doc nil :options []}
@@ -98,9 +117,9 @@
             (:cmd v)     (let [[cmd err] (try [(cmd-table (:cmd v)) nil]
                                               (catch Exception e [nil (ex-message e)]))]
                            (cond-> {:name nm :doc (:doc v)
-                                    :children (mapv (fn [[k c]] (node root k c)) cmd)}
+                                    :children (mapv (fn [[k c]] (node root defaults k c)) cmd)}
                              err (assoc :error err)))
-            (:exec-fn v) (leaf nm (:doc v) v)
+            (:exec-fn v) (leaf defaults nm (:doc v) v)
             :else        (cond-> {:name nm :doc (:doc v) :options []}
                            (terminal? v) (assoc :terminal true)))))))
 
@@ -111,7 +130,7 @@
 
 (let [config (first *command-line-args*)
       root (str (fs/parent (fs/absolutize config)))
-      tasks (:tasks (read-config config))]
+      {:keys [tasks] defaults :bb-transient/defaults} (read-config config)]
   (println (json/generate-string
-            {:tasks (mapv (fn [[k v]] (node root k v))
+            {:tasks (mapv (fn [[k v]] (node root defaults k v))
                           (filter public-task? tasks))})))

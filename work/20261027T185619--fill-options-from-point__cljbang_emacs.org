@@ -9,7 +9,7 @@
 #+CATEGORY:   work
 #+PROPERTY:   header-args :results output
 
-* TODO Plan
+* Plan
 
 forge's sandbox commands take =--id= (the task's =:ID:=) and its work
 commands take =--book= (the name part of the Denote workbook).  When
@@ -85,14 +85,16 @@ bb's own reader limits what a form can say in bb.edn:
 - No "around" hook :: commands run asynchronously, so "around" would
   only wrap starting the process.  =before= and =after= (below) cover it.
 
-** Open questions
+** Open questions (taken as proposed)
 
 - A filled value vs. the value transient remembers from the last run:
-  proposed that the filled value wins, since the menu should reflect
-  where point is.
+  the filled value wins, since the menu should reflect where point is.
+  Other remembered args stay.
 - Trust: bb-transient already runs the project's code through bb to
-  read the tasks; this also runs it inside Emacs.  Proposed
-  =bb-transient-eval-hooks=: =t=, =nil=, or =ask= once per project.
+  read the tasks; this also runs it inside Emacs.
+  =bb-transient-eval-hooks=: =t=, =nil=, or =ask= (the default) once
+  per project and session.  =ask= prompts when the top menu is built,
+  not while a menu is up.
 
 * TODO Defaults from point in bb-transient
 :PROPERTIES:
@@ -102,7 +104,7 @@ bb's own reader limits what a form can say in bb.edn:
 :BASE:     main
 :END:
 
-** TODO =bb-transient-project-function= (variable)
+** DONE =bb-transient-project-function= (variable)
 
 Called with no arguments in the buffer the menu is opened from; returns
 the project's directory.  Default =bb-transient-project-root=, so
@@ -114,7 +116,12 @@ Commands already run from the project by default
 (=bb-transient-directory-function=), so with =:REPO:= as the project
 they run from =:REPO:= too.
 
-** TODO =:bb-transient/defaults= in =bb-transient.clj=
+Done: that needed the directory default to follow the new variable, not
+the nearest bb.edn, so there is a small public
+=bb-transient-project= (calls =bb-transient-project-function=) and it
+is now =bb-transient-directory-function='s default.
+
+** DONE =:bb-transient/defaults= in =bb-transient.clj=
 
 Read the top-level key from the config, and the same key from task maps
 and =:exec-fn= metadata.  Send each form to Emacs as a string
@@ -128,25 +135,30 @@ and =:exec-fn= metadata.  Send each form to Emacs as a string
 Only options the leaf actually has; per-command forms replace the
 bb.edn-wide ones.
 
-** TODO Filling the options menu in =bb-transient.el=
+** DONE Filling the options menu in =bb-transient.el=
 
 - Each options menu gets an =:init-value= that evaluates the leaf's
   forms in transient's original buffer and sets =--NAME=VALUE= for each
   non-nil result.  It keeps the existing =++terminal= preset.
 - Each form is compiled once (=cljbang-compile= wrapped in a lambda)
-  and cached with the task tree, so =g= recompiles it.
+  and cached with the task tree, so =g= recompiles it.  (Compiled through
+the public =cljbang-eval-string= as =(fn [] FORM)=, cached by source
+string; =g= clears the cache.)
 - =(require 'cljbang nil t)=; when it's missing, message once and skip.
 - A filled value satisfies the "(required)" check.
 - =bb-transient-eval-hooks=, see Open questions.
 
-** TODO Tests
+** DONE Tests
 
 In =test/fixture=: a =:bb-transient/defaults= map, a leaf that has the
 option and one that doesn't, a per-command override, a form that
 errors.  Assert the menu's initial value from an org buffer with an
 =:ID:=.  Skip the cljbang ones when cljbang isn't on =load-path=.
 
-** TODO README
+=CLJBANG=~/src/github.com/kpassapk/cljbang.el bb test= runs them: 25
+pass.  Without =CLJBANG= the three cljbang tests skip.
+
+** DONE README
 
 A "Defaults from point" section: the bb.edn example, the reader limits
 table, and =bb-transient-project-function=.

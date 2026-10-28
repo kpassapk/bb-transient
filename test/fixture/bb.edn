@@ -1,4 +1,7 @@
 {:paths ["bb"]
+ :bb-transient/defaults {:a (el/org-entry-get nil "ID" true)
+                         :b (el/error "Boom")
+                         :name (el/buffer-name)}
  :tasks
  {zeta {:doc "Listed first, so order is file order"
         :task (println "zeta")}
@@ -16,7 +19,9 @@
 
   tui {:doc "Commands that want a terminal"
        :cmd {"top" {:exec-fn cmds/top}
-             "watch" {:bb-transient/terminal true :exec-fn cmds/echo}
+             "watch" {:bb-transient/terminal true
+                    :bb-transient/defaults {:a (el/buffer-name)}
+                    :exec-fn cmds/echo}
              "plain" {:exec-fn cmds/deep}}}
 
   -hidden {:task (println "private by name")}
