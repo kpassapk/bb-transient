@@ -1,4 +1,4 @@
-{:root/parent "kpassapk/root"
+{:forge/parent "atomstream/forge"
  :paths ["user"]
  :tasks
  {:init (do (def emacs (or (System/getenv "EMACS") "emacs"))
