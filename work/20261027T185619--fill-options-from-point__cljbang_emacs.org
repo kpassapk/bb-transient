@@ -1,0 +1,208 @@
+#+title:      Fill options from point
+#+date:       [2026-10-27 Tue 18:56]
+#+filetags:   :cljbang:emacs:
+#+identifier: 20261027T185619
+#+TARGET: bb_transient ~/src/github.com/kpassapk/bb-transient
+#+TARGET: forge        ~/src/github.com/atomstream/forge
+#+LINK:   cljbang      ~/src/github.com/kpassapk/cljbang.el
+#+LINK:   cljbang_org  ~/src/github.com/kpassapk/cljbang-org/
+#+CATEGORY:   work
+#+PROPERTY:   header-args :results output
+
+* TODO Plan
+
+forge's sandbox commands take =--id= (the task's =:ID:=) and its work
+commands take =--book= (the name part of the Denote workbook).  When
+=M-x bb-transient= is opened from a =task.org=, both should already be
+filled in from where point is, and the menu should be the =:REPO:=
+project's.
+
+Example: point anywhere in
+=~/work/20261024T125424--sandboxes/06510D5A-4A35-436B-91A4-A6A2D44CEA45/task.org=
+should give
+
+| Option   | Value                                  | From                        |
+|----------+----------------------------------------+-----------------------------|
+| =--id=   | =06510D5A-4A35-436B-91A4-A6A2D44CEA45= | =:ID:=, inherited           |
+| =--book= | =sandboxes=                            | the Denote name in the path |
+| project  | =~/src/github.com/atomstream/forge=    | =:REPO:=, inherited         |
+
+The rules are written in cljbang, so they can sit in bb.edn and still
+read like Clojure.
+
+** Two problems, two homes
+
+1. Which project :: has to be known /before/ any bb.edn is read, so it
+   can't live in bb.edn.  It goes in the Emacs config, as a new
+   =bb-transient-project-function=.
+2. What to fill in :: depends on the commands' options, so it lives in
+   the bb.edn that defines them, as =:bb-transient/defaults=.
+
+** Checked so far
+
+In the running Emacs, with point at the end of the example =task.org=:
+
+#+begin_src emacs-lisp :results value
+  (with-current-buffer (find-file-noselect "~/work/20261024T125424--sandboxes/06510D5A-4A35-436B-91A4-A6A2D44CEA45/task.org")
+    (save-excursion
+      (goto-char (point-max))
+      (list (cljbang-eval-string "(el/org-entry-get nil \"ID\" true)")
+            (cljbang-eval-string "(some->> (el/buffer-file-name) (re-find (re-pattern \"--\\\\([^/_.]+\\\\)\")) second)")
+            (cljbang-eval-string "(some-> (el/org-entry-get nil \"REPO\" true) el/expand-file-name)"))))
+#+end_src
+
+#+RESULTS:
+: ("06510D5A-4A35-436B-91A4-A6A2D44CEA45" "sandboxes" "/Users/kyle/src/github.com/atomstream/forge")
+
+bb's own reader limits what a form can say in bb.edn:
+
+| Form in bb.edn | bb                                                                |
+|----------------+-------------------------------------------------------------------|
+| =(el/f ...)=   | fine                                                              |
+| ='x=           | fine                                                              |
+| =(fn [m] ...)= | fine                                                              |
+| =#"..."=       | "Invalid regex literal found in EDN config, use re-pattern instead" |
+| =#(...)=       | not cljbang either; use =fn=                                      |
+
+=re-pattern= takes Emacs regex syntax, not Java's.
+
+** Decisions
+
+- Keys are option names :: one =:bb-transient/defaults= map per bb.edn
+  covers every command that has that option: =sandbox up=, =land=,
+  =down=, =checkout= get =--id=; =work start=, =plan=, =stop= get
+  =--book=.  A command without the option ignores the key.
+- Per-command overrides :: the same key in a task map or on an
+  =:exec-fn='s metadata wins over the bb.edn-wide one, like
+  =:bb-transient/terminal=.
+- Only the owning bb.edn :: forge's defaults fill only forge's commands,
+  not the =:REPO:= project's tasks shown in the same menu.
+- When :: each time an options menu opens, in the buffer and at the
+  point =M-x bb-transient= was called from.  =nil= or an error leaves
+  the option blank; an error also shows a message.
+- cljbang is optional :: without it, defaults are skipped with one
+  message.
+- No "around" hook :: commands run asynchronously, so "around" would
+  only wrap starting the process.  =before= and =after= (below) cover it.
+
+** Open questions
+
+- A filled value vs. the value transient remembers from the last run:
+  proposed that the filled value wins, since the menu should reflect
+  where point is.
+- Trust: bb-transient already runs the project's code through bb to
+  read the tasks; this also runs it inside Emacs.  Proposed
+  =bb-transient-eval-hooks=: =t=, =nil=, or =ask= once per project.
+
+* TODO Defaults from point in bb-transient
+:PROPERTIES:
+:ID:       7581F148-F96D-4C87-8127-FFF1156BF42F
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   defaults-from-point
+:BASE:     main
+:END:
+
+** TODO =bb-transient-project-function= (variable)
+
+Called with no arguments in the buffer the menu is opened from; returns
+the project's directory.  Default =bb-transient-project-root=, so
+nothing changes unless it is set.  =bb-transient= and
+=bb-transient-run= use it instead of calling =bb-transient-project-root=
+directly.
+
+Commands already run from the project by default
+(=bb-transient-directory-function=), so with =:REPO:= as the project
+they run from =:REPO:= too.
+
+** TODO =:bb-transient/defaults= in =bb-transient.clj=
+
+Read the top-level key from the config, and the same key from task maps
+and =:exec-fn= metadata.  Send each form to Emacs as a string
+(=pr-str=), on the leaf node:
+
+#+begin_src json
+  {"name": "up", "options": [...],
+   "defaults": {"id": "(el/org-entry-get nil \"ID\" true)"}}
+#+end_src
+
+Only options the leaf actually has; per-command forms replace the
+bb.edn-wide ones.
+
+** TODO Filling the options menu in =bb-transient.el=
+
+- Each options menu gets an =:init-value= that evaluates the leaf's
+  forms in transient's original buffer and sets =--NAME=VALUE= for each
+  non-nil result.  It keeps the existing =++terminal= preset.
+- Each form is compiled once (=cljbang-compile= wrapped in a lambda)
+  and cached with the task tree, so =g= recompiles it.
+- =(require 'cljbang nil t)=; when it's missing, message once and skip.
+- A filled value satisfies the "(required)" check.
+- =bb-transient-eval-hooks=, see Open questions.
+
+** TODO Tests
+
+In =test/fixture=: a =:bb-transient/defaults= map, a leaf that has the
+option and one that doesn't, a per-command override, a form that
+errors.  Assert the menu's initial value from an org buffer with an
+=:ID:=.  Skip the cljbang ones when cljbang isn't on =load-path=.
+
+** TODO README
+
+A "Defaults from point" section: the bb.edn example, the reader limits
+table, and =bb-transient-project-function=.
+
+* TODO Fill =--book= and =--id= in forge
+:PROPERTIES:
+:ID:       26EAB169-6783-4480-8029-D62F92AFAAA5
+:REPO:     ~/src/github.com/atomstream/forge
+:BRANCH:   bb-transient-defaults
+:BASE:     main
+:END:
+
+Needs the bb-transient task above landed first.
+
+** TODO bb.edn
+
+#+begin_src clojure
+  {:paths ["src"]
+   :bb-transient/defaults
+   {:id   (el/org-entry-get nil "ID" true)
+    :book (some->> (el/buffer-file-name)
+                   (re-find (re-pattern "--\\([^/_.]+\\)"))
+                   second)}
+   :tasks {...}}
+#+end_src
+
+If a form grows past a couple of lines, move it to a cljbang file
+(e.g. =emacs/forge_context.clj=) and call it from bb.edn.
+
+** TODO Project from =:REPO:= in the Emacs config
+
+#+begin_src emacs-lisp
+  (setq bb-transient-project-function
+        (lambda ()
+          (or (and (derived-mode-p 'org-mode)
+                   (clj! (some-> (el/org-entry-get nil "REPO" true) el/expand-file-name)))
+              (bb-transient-project-root))))
+#+end_src
+
+Check that a =:REPO:= other than forge still shows forge's =sandbox= and
+=work= groups through the =:forge/parent= chain.
+
+** TODO Try it
+
+From the example =task.org=: =M-x bb-transient=, =sandbox=, =up=;
+=--id= is filled in.  From the workbook in =forge/work/=, =work=,
+=plan=; =--book= is =sandboxes=.
+
+* TODO Later: =before= and =after= hooks
+
+Per task or per =:exec-fn=, not bb.edn-wide.
+
+- =:bb-transient/before (fn [{:keys [args dir]}] ...)= :: in the
+  original buffer, just before the command starts.  Returns new args,
+  =nil= to keep them, or throws to cancel the run.  E.g.
+  =(el/save-some-buffers t)= before =sandbox land=.
+- =:bb-transient/after (fn [{:keys [exit buffer]}] ...)= :: when the
+  process exits, from a hook local to the output buffer.  E.g. reload
+  =task.org= after =sandbox up= attaches it.
