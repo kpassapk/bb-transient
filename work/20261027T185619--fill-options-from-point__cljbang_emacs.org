@@ -9,7 +9,7 @@
 #+CATEGORY:   work
 #+PROPERTY:   header-args :results output
 
-* Plan
+* Fill options from point
 
 forge's sandbox commands take =--id= (the task's =:ID:=) and its work
 commands take =--book= (the name part of the Denote workbook).  When
@@ -173,7 +173,7 @@ table, and =bb-transient-project-function=.
 
 Needs the bb-transient task above landed first.
 
-** TODO bb.edn
+** DONE bb.edn
 
 #+begin_src clojure
   {:paths ["src"]
@@ -188,7 +188,7 @@ Needs the bb-transient task above landed first.
 If a form grows past a couple of lines, move it to a cljbang file
 (e.g. =emacs/forge_context.clj=) and call it from bb.edn.
 
-** TODO Project from =:REPO:= in the Emacs config
+** DONE Project from =:REPO:= in the Emacs config
 
 #+begin_src emacs-lisp
   (setq bb-transient-project-function
@@ -201,20 +201,180 @@ If a form grows past a couple of lines, move it to a cljbang file
 Check that a =:REPO:= other than forge still shows forge's =sandbox= and
 =work= groups through the =:forge/parent= chain.
 
-** TODO Try it
+** DONE Try it
 
 From the example =task.org=: =M-x bb-transient=, =sandbox=, =up=;
 =--id= is filled in.  From the workbook in =forge/work/=, =work=,
 =plan=; =--book= is =sandboxes=.
 
-* TODO Later: =before= and =after= hooks
+* =before= and =after= hooks
 
-Per task or per =:exec-fn=, not bb.edn-wide.
+Use case: in =atomstream/forge=, after =bb work start= Emacs should
+1. open every new =task.org= with =find-file-noselect=, so their
+   =:ID:= links resolve, and
+2. take the user to the new =workbook.org=.
 
-- =:bb-transient/before (fn [{:keys [args dir]}] ...)= :: in the
-  original buffer, just before the command starts.  Returns new args,
-  =nil= to keep them, or throws to cancel the run.  E.g.
-  =(el/save-some-buffers t)= before =sandbox land=.
-- =:bb-transient/after (fn [{:keys [exit buffer]}] ...)= :: when the
-  process exits, from a hook local to the output buffer.  E.g. reload
-  =task.org= after =sandbox up= attaches it.
+=work start= already prints the new directory as its last line, so the
+=after= hook can read it from the output.  It is a lot to write inline in
+bb.edn, so the hook is a function in a cljbang file:
+
+#+begin_src clojure
+  ;; forge: src/work.clj
+  (defn start
+    {:org.babashka/cli {...}
+     :bb-transient/before 'forge.hooks/save-book
+     :bb-transient/after  'forge.hooks/open-book}
+    [opts] ...)
+#+end_src
+
+#+begin_src clojure
+  ;; forge: emacs/forge/hooks.clj, run by cljbang
+  (ns forge.hooks
+    (:require [clojure.string :as str]))
+
+  (defn save-book
+    "start refuses a workbook with unsaved changes, so save them first."
+    [_]
+    (el/save-some-buffers true)
+    nil)
+
+  (defn open-book [{:keys [exit out]}]
+    (when (zero? exit)
+      (let [dir (last (str/split-lines out))]
+        (doseq [f (el/directory-files-recursively dir "\\`task\\.org\\'")]
+          (el/find-file-noselect f))
+        (el/find-file (el/expand-file-name "workbook.org" dir)))))
+#+end_src
+
+[[target:forge:bb.edn]]
+
+** The hooks
+
+A hook belongs to one command.  It can be set in the task map or in the
+=:exec-fn='s metadata, and the task map wins, as with
+=:bb-transient/terminal=.  There is no bb.edn-wide hook.
+
+- =:bb-transient/before= :: called with ={:args [...] :dir "..."}= in
+  the buffer =M-x bb-transient= was called from, just before the
+  command starts.  It returns a new args vector, or =nil= to keep the
+  args it was given.  If it throws, the run is cancelled and the error
+  is shown as a message.
+- =:bb-transient/after= :: called with ={:exit 0 :out "..." :buffer
+  <output buffer> :args [...]}= when the process exits, in the original
+  buffer if it is still live, otherwise in the output buffer.  Its
+  return value is ignored, and if it throws the error is shown as a
+  message.
+
+=:args= are the strings bb gets: ="--book=sandboxes"=.  =:out= is the
+text the process wrote (stdout and stderr together, as the buffer
+shows them), without compile's header and footer.
+
+A hook's value is one of:
+- a fully qualified symbol :: =forge.hooks/open-book=.  Its namespace
+  is =require=-d from the project's =:bb-transient/cljbang-paths=
+  (below) before the first call.
+- an =(fn ...)= form :: for one-liners, e.g.
+  =(fn [_] (el/save-some-buffers true) nil)=.
+
+Since =:exec-fn= metadata is evaluated, the value has to be quoted there.
+In a task map it doesn't.
+
+** Decisions
+
+- Hooks are sent the same way as defaults :: =bb-transient.clj= puts
+  them on the leaf as strings (=pr-str=), ="before": "forge.hooks/save-book"=,
+  next to =terminal= and =defaults=.  A plain =:task= without an
+  =:exec-fn= can have hooks too.
+- =:bb-transient/cljbang-paths= :: a new top-level key in bb.edn, with
+  directories relative to the project that are added to
+  =cljbang-load-path= while a hook runs.  forge uses =["emacs"]=.  No
+  default, since =src/= is bb's and isn't meant for cljbang.
+- One way to watch the process exit :: =add-function :after= on the
+  output process's sentinel.  This works for =compile= and
+  =ghostel-compile= alike, as long as each one leaves a process in its
+  buffer.  It runs after compile has written its footer.
+- Where =:out= starts and ends :: =(point-max)= of the output buffer
+  right after =compile= returns.  The process can't have written
+  anything yet, since its filter only runs once Emacs waits for input.
+  It ends just before compile's ="\nCompilation ..."= footer.  In a
+  terminal buffer it is whatever text the buffer holds.
+- Only menu runs :: =bb-transient-run= stays a plain runner without
+  hooks.  =bb-transient--run= takes the hooks as an optional argument.
+- Trust and cljbang :: the same as defaults.  A tree with hooks counts
+  as having forms when the top menu asks =bb-transient-eval-hooks=.
+  When a project isn't trusted, or cljbang is missing, the command runs
+  without its hooks and a message says so.
+- Compiled once :: through the existing =bb-transient--compile= cache.
+  =g= clears it, and also forgets which hook namespaces have already
+  been required.
+
+** Open questions (taken as proposed)
+
+- Should =after= run on failure?  Yes, with =:exit=, so a hook can
+  report the failure.  The examples check =(zero? exit)=.
+- =find-file= from a sentinel uses whatever window is selected when
+  the process exits.  That is good enough for now.  If it isn't, the
+  hook can call =el/pop-to-buffer= itself.
+
+* TODO Hooks in bb-transient
+:PROPERTIES:
+:ID:       5BD17CE2-A029-403A-86C3-B67CE5E51C8A
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   before-after-hooks
+:BASE:     main
+:END:
+
+** TODO =bb-transient.clj=
+
+Read =:bb-transient/before= and =:bb-transient/after= from the task map
+and from the =:exec-fn= metadata, letting the task map win.  Do it for
+=:exec-fn= leaves and for plain tasks.  Read top-level
+=:bb-transient/cljbang-paths= and send it once, next to ="tasks"=.
+
+** TODO =bb-transient.el=
+
+- Put =before=, =after= and the cljbang paths on each command symbol,
+  as is done for =bb-transient-defaults=.
+- A hook form becomes a function: a symbol is required, then
+  =(fn [m] (SYM m))=.  An =fn= form is used as it is.
+- =bb-transient-run-current= and the direct run in
+  =bb-transient--define= pass the hooks to =bb-transient--run=.  It
+  calls =before= in the original buffer, runs the command, records
+  where =:out= starts, and adds the =after= sentinel.
+- =bb-transient--has-defaults= becomes =--has-forms=, and also checks
+  for hooks.
+
+** TODO Tests
+
+Fixture tasks for:
+- a =before= that rewrites the args
+- a =before= that throws, so nothing runs
+- an =after= that records =:exit= and =:out=
+- a symbol hook loaded from a fixture =cljbang-paths= directory
+
+Wait for the process with =accept-process-output=.
+
+** TODO README
+
+Add a "Hooks" section after "Defaults from point".
+
+* TODO Open the workbook after =work start= in forge
+:PROPERTIES:
+:ID:       D9EE7E4F-C738-4128-8364-BB25E108B56C
+:REPO:     ~/src/github.com/atomstream/forge
+:BRANCH:   bb-transient-hooks
+:BASE:     main
+:END:
+
+Needs the bb-transient hooks task above landed first.
+
+** TODO =emacs/forge/hooks.clj= and the metadata on =work/start=
+
+Use the code from the use case.  Add =:bb-transient/cljbang-paths
+["emacs"]= to bb.edn.
+
+** TODO Try it
+
+=M-x bb-transient=, =work=, =start= on a workbook that has unsaved
+changes.  The changes get saved, every =task.org= ends up in a buffer,
+and =workbook.org= is shown.
