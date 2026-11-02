@@ -1,0 +1,35 @@
+#+TITLE: ergonomics
+#+CATEGORY: work
+
+* Background
+
+This package should provide a good-
+
+* Approach
+
+** Fix project-switch-commands
+
+Incorrectly opens the current project's =bb.edn= and not the one for the target project.
+
+** Silence comint
+
+In a lot of my =bb-transient= commands, I don't care about the command output, only when something fails.
+I want no output at all, unless there has been an error, then comint and compilation is good.
+
+This should be selected command-by-command. 
+
+** Copy command
+
+Can I construct a command using info at point (as it works now), and then copy it, without executing it?
+The =transient-history= command seems to include values of last commands.
+
+Maybe achievable with a hook function and a custom command, and this is a documentation task.
+
+The use case is: in some cases, I want to drive my workflow with agents, and in the forge can only see commands that are in source code blocks. If I execute something from a transient, it's not visible to the agent.
+
+** Other inputs
+
+Date inputs using calendar?
+
+* Spec
+
