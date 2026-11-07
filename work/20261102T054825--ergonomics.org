@@ -3,20 +3,30 @@
 
 * Background
 
-This package should provide a good-
+This package should provide a good base experience.
 
 * Approach
+:PROPERTIES:
+:ID:       A6A6369F-CDFD-4042-A086-8D8D5D15A84A
+:BRANCH: ergonomics-approach
+:BASE:   main
+:IMAGE:  bb-claude-emacs
+:END:
 
-** Fix project-switch-commands
+** Fix project-switch-commands example
 
-Incorrectly opens the current project's =bb.edn= and not the one for the target project.
+Incorrectly opens the current project's =bb.edn= and not the one for the project we are switching to
 
-** Silence comint
+README.md:91
+
+** Silence output
 
 In a lot of my =bb-transient= commands, I don't care about the command output, only when something fails.
-I want no output at all, unless there has been an error, then comint and compilation is good.
+In those cases, I want no output at all, unless there has been an error, or I am asked for input.
 
-This should be selected command-by-command. 
+Otherwise, the current output is good.
+
+This should be selected command-by-command, since I know which commands my prompt and where the output actually matters.
 
 ** Copy command
 
@@ -31,5 +41,17 @@ The use case is: in some cases, I want to drive my workflow with agents, and in 
 
 Date inputs using calendar?
 
-* Spec
+Completion-at-point functions? For example, if there is a set of known inputs, then it would be amazing if <ENTER> would pop up a capf. Or if setting a switch could trigger a CAPF.
 
+** Command ordering and grouping
+
+Related commands (=bb work start= / =stop=, or =bb sandbox up= / =down=) should be in order and next to each other in the transient menu.
+
+See https://github.com/kickingvegas/casual for some crafted Transient menus, with multiple columns.
+
+** Specify a key
+
+The =bb work snapshot= command is analogous to magit's snapshot.
+magit has key "z" in its transient, and mine is auto-generated.
+
+I have some muscle memory with magit's key combinations. 
