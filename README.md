@@ -11,7 +11,7 @@ switches][bb-tasks]. This means that tasks can now be full-blown
 project CLIs.
 
 Full-blown CLIs get complex pretty quickly. Babashka already supports
-completion for various shells (bash, fish, zsh, etc), to help you quickly
+completion for various shells (bash, fish, zsh, etc), to help you
 construct complex commands and avoid typos.
 
 This project serves a similar purpose. It analyzes babashka's CLI spec
@@ -25,20 +25,42 @@ please open a Github ticket.
 [bb-tasks]: https://blog.michielborkent.nl/babashka-tasks-cli.html
 [transient]: https://github.com/magit/transient
 
+## Installation
+
+```
+(use-package bb-transient
+  :vc (:url "https://github.com/kpassapk/bb-transient")
+  :commands bb-transient)
+```
+
+Most of the configuration goes in `bb.edn`, which is read by _both
+babashka and Emacs_ (via [cljbang][cljbang]). If cljbang can't read it,
+then it should go in =:bb-transient/cljbang-paths=.
+
+```clojure
+{:paths ["src"]
+
+  :bb-transient/cljbang-paths ["emacs"]
+  :tasks {
+    :init {:exec-fn tasks/init   :bb-transient/after 'hooks/open-project
+    :watch {:exec-fn tasks/watch :bb-transient/terminal true}}
+
+  :bb-transient/defaults
+  {:id   (el/org-entry-get nil "ID" true)}}
+```
+
 ## Usage
 
-`M-x bb-transient` in any buffer under a project with a `bb.edn` opens a
-menu of its tasks.  Tasks with a `:cmd` table open a submenu; commands
-with a babashka.cli spec open an options menu; anything else runs as
-soon as its key is pressed.  Commands run from the project root in a
-`compilation-mode` buffer named `*bb <command>*`.
+`M-x bb-transient` opens a menu.  Tasks with a `:cmd` table open
+a submenu; commands with a `babashka.cli` spec open an options menu;
+anything else runs as soon as its key is pressed.  Commands run from
+the project root in a `compilation-mode` buffer named `*bb
+<command>*`.
 
 ## How the menus are built
 
-bb reads the tree, not `--help`.  `bb-transient.clj` runs under the
-project's own `bb.edn` (so its `:paths` and `:deps` are on the
-classpath), walks `:tasks` and nested `:cmd` tables in file order,
-resolves each `:exec-fn`, and reads the `:spec` from its
+`bb-transient.clj` walks `:tasks` and nested `:cmd` tables in file
+order, resolves each `:exec-fn`, and reads the `:spec` from its
 `:org.babashka/cli` metadata:
 
 | spec                 | menu                                     |
@@ -117,9 +139,6 @@ directory and returns `(LABEL . DIRECTORY)` pairs, outermost first:
 - The current project's tasks get keys first.  `g` re-reads every project.
 - A function that returns the current project itself labels its group.
 
-[root-transient](https://github.com/kpassapk/root) uses this to show a
-project's tasks along with its ancestors'.
-
 `bb-transient-directory-function` decides where commands run (the
 project root by default); `(lambda () default-directory)` runs them from
 the buffer's directory instead.  From Lisp, `bb-transient-run` runs a task
@@ -155,7 +174,7 @@ from:
   project and session) by default; `t` or `nil` to always or never.
 - Without cljbang, defaults are skipped with a message.
 
-bb reads bb.edn too, which limits what a form can say:
+Of course, `bb` reads `bb.edn` too, which limits what a form can say:
 
 | Form           | In bb.edn                                          |
 |----------------|----------------------------------------------------|
@@ -167,6 +186,8 @@ bb reads bb.edn too, which limits what a form can say:
 
 A form longer than a couple of lines reads better in a cljbang file
 called from bb.edn.
+
+## Project function
 
 Which project's menu opens is up to `bb-transient-project-function`
 (the nearest bb.edn by default).  Commands run from that project too.
