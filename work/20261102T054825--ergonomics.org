@@ -178,13 +178,34 @@ on an option in its spec map (=:bb-transient/key "-f"=, overriding
 - Multi-key sequences (="w c"=) work, as transient allows them.
 
 
-* Chunk 1
+* Chunk 1 :local:
 :PROPERTIES:
 :ID:       EA819698-1453-4E59-98CB-3DFDF2C3EB38
 :REPO:     ~/src/github.com/kpassapk/bb-transient
 :BRANCH:   ergonomics-approach-1
+:IMAGE:    bb-claude-emacs
 :BASE:     main
 :END:
+
+Start the two children: =ergonomics-project-switch= (606E2F3A) and
+=ergonomics-copy= (E637E0B9), both based on =ergonomics-approach-1=.
+
+#+begin_src sh :results output
+atomforge sandbox up 606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
+atomforge agent start 606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
+#+end_src
+
+
+#+begin_src sh :results output
+atomforge sandbox up E637E0B9-E49A-47EF-8EA7-8F6707A0096F
+atomforge agent start E637E0B9-E49A-47EF-8EA7-8F6707A0096F
+#+end_src
+
+Check on them.
+
+#+begin_src sh :results output
+atomforge  agent status
+#+end_src
 
 ** project-switch-commands opens the wrong project
 :PROPERTIES:
@@ -192,6 +213,7 @@ on an option in its spec map (=:bb-transient/key "-f"=, overriding
 :BRANCH:   ergonomics-project-switch
 :BASE:     ergonomics-approach-1
 :IMAGE:    bb-claude-emacs
+:AGENT:    sonnet
 :ID:       606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
 :END:
 
@@ -214,13 +236,14 @@ old project: the new project's tasks would run in the old one with
 - A test that opens the menu with the override set and checks the
   project and the run directory.
 
-** Copy a command line
+** Copy a command line :local:
 :PROPERTIES:
 :REPO:     ~/src/github.com/kpassapk/bb-transient
 :BRANCH:   ergonomics-copy
 :BASE:     ergonomics-approach-1
 :IMAGE:    bb-claude-emacs
 :ID:       E637E0B9-E49A-47EF-8EA7-8F6707A0096F
+:AGENT:    sonnet
 :END:
 
 Build a command in the menu, with defaults from point as now, and copy
