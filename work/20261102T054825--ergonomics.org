@@ -3,22 +3,44 @@
 
 * Background
 
-This package should provide a good base experience.
+This package should provide a good base experience, for bb projects.
 
-* Approach
-:PROPERTIES:
-:ID:       A6A6369F-CDFD-4042-A086-8D8D5D15A84A
-:REPO:   ~/src/github.com/kpassapk/bb-transient
-:BRANCH: ergonomics-approach
-:BASE:   main
-:IMAGE:  bb-claude-emacs
-:END:
+* Issues
 
 ** Fix project-switch-commands example
 
-Incorrectly opens the current project's =bb.edn= and not the one for the project we are switching to
+README.md:
 
-README.md:91
+#+begin_src elisp
+  (add-to-list 'project-switch-commands '(bb-transient "bb tasks" ?b))
+#+end_src
+
+incorrectly opens the current project's =bb.edn= and not the one for the project we are switching to.
+
+*** Proposal
+
+In batch Emacs, with =project-current-directory-override=
+set to project B, =bb-transient-project= still returns A.
+=project-switch-project= (Emacs 31) sets that override buffer-locally
+and kills it when the command returns, and bb-transient never reads it:
+=bb-transient-project-root= starts from =default-directory=.
+
+A second problem the README can't fix: =transient-setup= returns at
+once, so by the time RET runs, the override is gone, and
+=bb-transient-directory-function= (called at run time) answers A again.
+B's tasks would run in A with =--config B/bb.edn=.
+
+Fix in the code, not just the README:
+- =bb-transient-project-root= starts from
+  =project-current-directory-override= when it is set.
+- The directory commands run from is decided when the menu opens and
+  kept on the menu (as =bb-transient-root= already is), not
+  recomputed at run time.
+- A test that opens the menu with the override set and checks both.
+The README line then works as written.
+
+
+* Improvements
 
 ** Silence output
 
@@ -29,20 +51,83 @@ Otherwise, the current output is good.
 
 This should be selected command-by-command, since I know which commands my prompt and where the output actually matters.
 
+*** Proposal
+
+A per-command flag, set like =:bb-transient/terminal=: in the task map
+or on the =:exec-fn='s metadata.
+
+#+begin_src clojure
+  snapshot {:exec-fn work/snapshot :bb-transient/quiet true}
+#+end_src
+
+- The command runs in its usual buffer, but not displayed
+  (=display-buffer-no-window= around =compile=).
+- Exit non-zero: the buffer pops up, as now.
+- Exit 0: a message in the echo area, =bb work snapshot: done=.
+- Asked for input: when the process has written a line with no newline
+  and then gone quiet (~0.3 s) while still alive, it is probably a
+  prompt, and the buffer pops up. A heuristic, but it covers
+  =read-line= after a =print=.
+- =s= ("silent") in an options menu, next to =t=, flips it for one run.
+- Terminal commands ignore it: a TUI wants its window.
+- After hooks still get =:out=.
+
 ** Copy command
 
-Can I construct a command using info at point (as it works now), and then copy it, without executing it?
-The =transient-history= command seems to include values of last commands.
+In some cases, I want to drive my workflow with agents, and in the
+forge can only see commands that are in source code blocks. If I
+execute something from a transient, it's not visible to the agent.
 
-Maybe achievable with a hook function and a custom command, and this is a documentation task.
+*** Proposal
 
-The use case is: in some cases, I want to drive my workflow with agents, and in the forge can only see commands that are in source code blocks. If I execute something from a transient, it's not visible to the agent.
+=transient-history= holds infix values, not command lines, so a hook
+can't rebuild the command without redoing what =bb-transient--run=
+does (layers' =--config=, extra args, =++terminal=). Better a small
+feature than docs:
+
+- =w= in every options menu, next to =RET=: copies the command line
+  =RET= would run (=bb-transient--command=), with defaults from point
+  filled in. The before hook is not called: it can have effects
+  (=save-some-buffers=).
+- Bare leaves run on their key, so for them, =w= in the top menu turns
+  on "copy instead of run" for the next command picked, in any
+  submenu. The flag is cleared when the menu exits.
+- From Lisp: =bb-transient-command-line PATH ARGS= returns the string,
+  for your own glue (an org block, a forge message).
+
+Whether it also inserts an =#+begin_src sh= block is question 3 above.
 
 ** Other inputs
 
 Date inputs using calendar?
 
-Completion-at-point functions? For example, if there is a set of known inputs, then it would be amazing if <ENTER> would pop up a capf. Or if setting a switch could trigger a CAPF.
+*** Proposal
+
+Transient already prompts with =completing-read= when an infix has
+=:choices=, and has =transient-read-date= (=org-read-date=, with the
+calendar). In the minibuffer that is the completion UI you already use
+(vertico, corfu's minibuffer mode...), which is what a CAPF would be in
+a buffer. So: let the spec say which reader an option gets.
+babashka.cli ignores keys it doesn't know, so they can go in the
+option's own spec map:
+
+#+begin_src clojure
+{:spec {:due   {:desc "Due date" :bb-transient/read :date}
+        :dir   {:desc "Where"    :bb-transient/read :directory}
+        :env   {:desc "Env"      :bb-transient/choices ["dev" "staging" "prod"]}
+        :book  {:desc "Book"     :bb-transient/choices (el/my-books)}}}
+#+end_src
+
+- =:bb-transient/read= one of =:date=, =:file=, =:directory=,
+  =:number=: transient's own readers.
+- =:bb-transient/choices= a vector, fixed; or a cljbang form,
+  evaluated in Emacs each time you set the option, like defaults (and
+  trusted like them). A quoted form on fn metadata, as for defaults.
+- Choices complete, but don't restrict: you can still type something
+  else.
+- A switch triggering completion: a switch has no value to complete.
+  If you meant "pressing the option's key should prompt with
+  completion", that is the above.
 
 ** Command ordering and grouping
 
@@ -50,9 +135,222 @@ Related commands (=bb work start= / =stop=, or =bb sandbox up= / =down=) should 
 
 See https://github.com/kickingvegas/casual for some crafted Transient menus, with multiple columns.
 
+*** Proposal
+
+Why they aren't together now: the menu follows bb.edn order, which
+=bb-transient.clj= reads with rewrite-clj to keep it. But a =:cmd=
+table held in a var (=:cmd forge/work-cmds=) is an evaluated map, and a
+Clojure map with more than 8 entries is a hash map: its order is
+arbitrary. (Checked: 12 keys come back as =c11 c3 c10 c6 ...=.) The same
+goes for a =:spec= given as a map with more than 8 options.
+
+1. Order: for a var-held table, find its =def= from the var's =:file=
+   and =:line= metadata and read the literal with rewrite-clj, as
+   bb.edn is. The same for a map =:spec= on fn metadata. Then file
+   order holds everywhere, and putting =start= next to =stop= in the
+   source is enough.
+2. Groups, casual-style: =:bb-transient/group "Lifecycle"= on a
+   command puts it in a column with that heading; commands without one
+   stay in the first column. Columns in order of first appearance.
+   Transient lays out a vector of groups side by side, so this is a
+   change to =bb-transient--define-menu= only.
+3. Optionally, a menu with many commands and no groups is split into
+   columns of ~10, so it fits the frame.
+
 ** Specify a key
 
 The =bb work snapshot= command is analogous to magit's snapshot.
 magit has key "z" in its transient, and mine is auto-generated.
 
 I have some muscle memory with magit's key combinations. 
+
+*** Proposal
+
+=:bb-transient/key "z"= on a command (task map or fn metadata), and
+on an option in its spec map (=:bb-transient/key "-f"=, overriding
+=:alias=).
+
+- Explicit keys are placed first, then the rest get auto keys from
+  what's left, so an explicit =z= never loses to an auto one.
+- Two explicit keys clashing in one menu, or one on =q=, =g=, =RET=,
+  =t=, =s=, =w= (the built-ins): a message, and the later one gets an auto
+  key.
+- Multi-key sequences (="w c"=) work, as transient allows them.
+
+
+* Chunk 1
+:PROPERTIES:
+:ID:       EA819698-1453-4E59-98CB-3DFDF2C3EB38
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-approach-1
+:BASE:     main
+:END:
+
+** project-switch-commands opens the wrong project
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-project-switch
+:BASE:     ergonomics-approach-1
+:IMAGE:    bb-claude-emacs
+:ID:       606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
+:END:
+
+README.md:91 suggests
+=(add-to-list 'project-switch-commands '(bb-transient "bb tasks" ?b))=.
+It opens the current project's menu, not the one switched to.
+=project-switch-project= (Emacs 31) sets
+=project-current-directory-override= buffer-locally around the
+command, and bb-transient never reads it. Also, =transient-setup=
+returns at once, so when RET runs, the override is gone and
+=bb-transient-directory-function= (called at run time) answers the
+old project: the new project's tasks would run in the old one with
+=--config=.
+
+- =bb-transient-project-root= starts from
+  =project-current-directory-override= when it is non-nil.
+- The directory commands run from is decided when the menu opens and
+  kept on the menu, like =bb-transient-root=, not recomputed at run
+  time.
+- A test that opens the menu with the override set and checks the
+  project and the run directory.
+
+** Copy a command line
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-copy
+:BASE:     ergonomics-approach-1
+:IMAGE:    bb-claude-emacs
+:ID:       E637E0B9-E49A-47EF-8EA7-8F6707A0096F
+:END:
+
+Build a command in the menu, with defaults from point as now, and copy
+it instead of running it, to paste into an org src block where an
+agent can see it.
+
+- =w= in every options menu, next to =RET=: =kill-new= the command
+  line =RET= would run (=bb-transient--command=: =bb=, =--config= for
+  another layer's task, the path, the args, extra args split), and
+  say so in a message. The command line only: no =cd=, no src block.
+- The before hook is not called (it can have effects).
+- Required options are checked as for =RET=.
+- Bare leaves run on their key, so =w= in the top menu sets "copy
+  instead of run" for the next command picked, in any submenu, shown
+  in the menu while on; cleared when the menu exits. The options
+  menu's =RET= honours it too.
+- =bb-transient-command-line PATH &optional ARGS PROJECT= returns the
+  string, for Lisp.
+- Built-ins: top menu =q= =g= =w=; options menu =RET= =t= =s= =w= =-==.
+- Tests and a README section. =bb ci= passes.
+
+ TODO Batch 2
+* TODO Chunk 2
+** Explicit keys
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-explicit-keys
+:BASE:     ergonomics-approach
+:IMAGE:    bb-claude-emacs
+:END:
+
+=:bb-transient/key "z"= on a command (task map or =:exec-fn=
+metadata; the task map wins, as for =:bb-transient/terminal=), and in
+an option's spec map (=:bb-transient/key "-f"=, overriding =:alias=).
+
+- Explicit keys are placed first in a menu, then the rest get auto
+  keys from what is left.
+- Two explicit keys clashing in one menu, or one on a built-in: a
+  message, and the later one gets an auto key.
+- Built-ins, reserved now even where the feature isn't there yet:
+  top menu =q= =g= =w=; options menu =RET= =t= =s= =w= =-==.
+- Multi-key sequences work, as transient allows them.
+
+** Order and groups
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-order
+:BASE:     ergonomics-approach
+:IMAGE:    bb-claude-emacs
+:END:
+
+The menu follows bb.edn order (=bb-transient.clj= reads it with
+rewrite-clj). But a =:cmd= table held in a var is an evaluated map,
+and a Clojure map with more than 8 entries is a hash map in arbitrary
+order; the same for a =:spec= map on fn metadata with more than 8
+options. That is why related commands (=work start= / =stop=) end up
+apart.
+
+- For a var-held =:cmd= table, and a map =:spec= on fn metadata, find
+  the =def= / =defn= from the var's =:file= and =:line= and read the
+  literal with rewrite-clj to recover source order. Fall back to the
+  evaluated order when the source can't be read.
+- =:bb-transient/group "Lifecycle"= on a command puts it in a column
+  with that heading; commands without one stay in the first,
+  unlabelled column; columns in order of first appearance. In the
+  style of https://github.com/kickingvegas/casual.
+- README sections for keys and groups.
+
+** Quiet commands
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-quiet
+:BASE:     ergonomics-approach
+:IMAGE:    bb-claude-emacs
+:END:
+
+Many commands' output only matters when they fail or prompt. A
+per-command flag, set like =:bb-transient/terminal= (task map or
+=:exec-fn= metadata, the task map winning):
+
+#+begin_src clojure
+snapshot {:exec-fn work/snapshot :bb-transient/quiet true}
+#+end_src
+
+- The command runs in its usual =*bb ...*= buffer, not displayed
+  (=display-buffer-no-window= around =compile=). The buffer is kept,
+  as now, to look at later.
+- Exit non-zero: the buffer is displayed.
+- Exit 0: a message, =bb work snapshot: done=.
+- Asked for input: when the process has written a partial line (no
+  trailing newline) and then been silent ~0.3 s while still alive,
+  display the buffer. A heuristic; say so in the README.
+- =s= ("silent") in the options menu, next to =t=, flips it for one
+  run. Bare leaves: no flip for now.
+- Terminal commands ignore it.
+- After hooks still get =:out= and =:exit=.
+- Options-menu built-ins: =RET= =t= =s= =w= =-==; don't take others.
+- Tests with the fixture: a quiet command that succeeds shows no
+  window, one that fails does. README section. =bb ci= passes.
+
+** Option readers and choices
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-inputs
+:BASE:     ergonomics-approach
+:IMAGE:    bb-claude-emacs
+:END:
+
+Let an option's spec say how its value is read. babashka.cli ignores
+keys it doesn't know, so they go in the option's spec map:
+
+#+begin_src clojure
+{:spec {:due  {:desc "Due date" :bb-transient/read :date}
+        :dir  {:desc "Where"    :bb-transient/read :directory}
+        :env  {:desc "Env"      :bb-transient/choices ["dev" "staging" "prod"]}
+        :book {:desc "Book"     :bb-transient/choices (el/my-books)}}}
+#+end_src
+
+- =:bb-transient/read=: =:date= (=transient-read-date=, the
+  calendar), =:file=, =:directory=, =:number= (transient's own
+  readers).
+- =:bb-transient/choices=: a vector, sent as is by
+  =bb-transient.clj=; or a cljbang form, sent as a string and
+  evaluated in Emacs each time the option is set, in the buffer the
+  menu was opened from, trusted like =:bb-transient/defaults=
+  (=bb-transient-eval-hooks=). On fn metadata a form is quoted, as
+  for defaults. No bb-side fn.
+- Choices are offered with =completing-read=, not enforced: another
+  value can be typed.
+- Without cljbang, or untrusted, a form gives no choices and the
+  option reads plain text.
+- Tests (the cljbang ones skip without =CLJBANG=, as now) and a README
+  section. =bb ci= passes.
