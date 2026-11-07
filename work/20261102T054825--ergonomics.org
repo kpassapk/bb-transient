@@ -8,6 +8,7 @@ This package should provide a good base experience.
 * Approach
 :PROPERTIES:
 :ID:       A6A6369F-CDFD-4042-A086-8D8D5D15A84A
+:REPO:   ~/src/github.com/kpassapk/bb-transient
 :BRANCH: ergonomics-approach
 :BASE:   main
 :IMAGE:  bb-claude-emacs
