@@ -625,10 +625,11 @@ The last is ROOT, labelled by its directory name unless a function in
 (defun bb-transient--setup (root &optional refresh)
   "Define the top menu for ROOT and its layers, and return its symbol.
 A group per layer, ROOT's first and the outermost last.  Keys go to the
-innermost layer first, so ROOT's tasks get the letters of their names.
-A layer whose
-tasks can't be read is left out, unless it is ROOT.  REFRESH also
-recompiles the defaults and hooks, and requires hook namespaces again."
+outermost layer first, so a parent's keys are the same in every project
+that uses it; ROOT's tasks take what is left.  A task in an inner layer
+hides an outer layer's of the same name.  A layer whose tasks can't be
+read is left out, unless it is ROOT.  REFRESH also recompiles the
+defaults and hooks, and requires hook namespaces again."
   (when refresh
     (clrhash bb-transient--compiled)
     (clrhash bb-transient--required))
@@ -637,7 +638,9 @@ recompiles the defaults and hooks, and requires hook namespaces again."
          (sym (intern (format "bb-transient:%s"
                               (substring (md5 (prin1-to-string layers)) 0 6))))
          (taken (list "q" "g"))
-         seen groups)
+         seen found groups)
+    ;; Innermost first, so its tasks hide an outer layer's; `found' ends
+    ;; up outermost first, which is the order the keys are given in.
     (pcase-dolist (`(,label . ,dir) (reverse layers))
       (when-let* ((tree (condition-case err
                             (bb-transient-tasks dir refresh)
@@ -651,23 +654,25 @@ recompiles the defaults and hooks, and requires hook namespaces again."
           (when (and (bb-transient--has-forms tree) (bb-transient--cljbang-p))
             (bb-transient--trusted-p dir))
           (setq seen (append seen (mapcar (lambda (n) (alist-get 'name n)) tree)))
-          (push (vconcat
-                 (list (if (cdr layers) label "bb tasks"))
-                 (mapcar (lambda (node)
-                           (let ((key (bb-transient--key (alist-get 'name node) taken)))
-                             (push key taken)
-                             (list key (bb-transient--describe node)
-                                   (bb-transient--define
-                                    dir (list (alist-get 'name node)) node))))
-                         tree))
-                groups))))
+          (push (list label dir tree) found))))
+    ;; Pushing reverses `found', so the groups end up innermost first.
+    (pcase-dolist (`(,label ,dir ,tree) found)
+      (push (vconcat
+             (list (if (cdr layers) label "bb tasks"))
+             (mapcar (lambda (node)
+                       (let ((key (bb-transient--key (alist-get 'name node) taken)))
+                         (push key taken)
+                         (list key (bb-transient--describe node)
+                               (bb-transient--define
+                                dir (list (alist-get 'name node)) node))))
+                     tree))
+            groups))
     (put sym 'bb-transient-root root)
     (put sym 'bb-transient-layers layers)
-    ;; Built innermost first for the keys; shown innermost first too.
     (eval
      `(transient-define-prefix ,sym ()
         "bb tasks"
-        ,@(nreverse groups)
+        ,@groups
         [("g" "Refresh" bb-transient-refresh :transient nil)])
      t)
     sym))

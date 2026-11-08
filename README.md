@@ -138,7 +138,8 @@ first:
   `:deps` still resolve.
 - A task in an inner project hides an outer project's task of the same
   name.  `:cmd` tables aren't merged.
-- The current project's tasks get keys first.  `g` re-reads every project.
+- The outermost project's tasks get keys first, so a parent's keys are
+  the same in every project that uses it.  `g` re-reads every project.
 - A function that returns the current project itself labels its group.
 
 `bb-transient-directory-function` decides where commands run (the

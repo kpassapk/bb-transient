@@ -425,6 +425,25 @@
                            groups)
                    '("fixture" "outer" nil)))))
 
+(ert-deftest bb-transient-test-setup-outer-keys-first ()
+  "An outer layer's keys don't depend on the project using it."
+  (let* ((dir (make-temp-file "bb-transient-inner" t))
+         (bb-transient-layers-functions '(bb-transient-test--outer-layer)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "bb.edn" dir)
+            (insert "{:tasks {oz {:task (println \"oz\")} zeta {:task (println \"zeta\")}}}"))
+          (let* ((top (bb-transient--setup dir t))
+                 (groups (aref (get top 'transient--layout) 2))
+                 (keys (lambda (i)
+                         (mapcar (lambda (s) (plist-get (cdr s) :key))
+                                 (aref (nth i groups) 2)))))
+            ;; The inner `oz' would have had "o" first; the outer `outer'
+            ;; has it, as it does in any project.
+            (should (equal (funcall keys 0) '("z" "e")))
+            (should (member "o" (funcall keys 1)))))
+      (delete-directory dir t))))
+
 (ert-deftest bb-transient-test-run-outer-task-here ()
   (let* ((bb-transient-use-comint nil)
          (default-directory bb-transient-test--fixture)
