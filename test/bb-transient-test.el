@@ -416,6 +416,15 @@
     (should-not (eq top (let ((bb-transient-layers-functions nil))
                           (bb-transient--setup bb-transient-test--fixture))))))
 
+(ert-deftest bb-transient-test-setup-layer-order ()
+  "The current project's group comes first, the outermost layer's last."
+  (let* ((bb-transient-layers-functions '(bb-transient-test--outer-layer))
+         (top (bb-transient--setup bb-transient-test--fixture t))
+         (groups (aref (get top 'transient--layout) 2)))
+    (should (equal (mapcar (lambda (g) (plist-get (aref g 1) :description))
+                           groups)
+                   '("fixture" "outer" nil)))))
+
 (ert-deftest bb-transient-test-run-outer-task-here ()
   (let* ((bb-transient-use-comint nil)
          (default-directory bb-transient-test--fixture)

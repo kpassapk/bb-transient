@@ -122,9 +122,11 @@ needed if you use this.
 
 ## Layers
 
-A menu can hold other projects' tasks too, a group per project.  Each
-function in `bb-transient-layers-functions` gets the current project's
-directory and returns `(LABEL . DIRECTORY)` pairs, outermost first:
+A menu can hold other projects' tasks too, a group per project: the
+current project's tasks first, then the other projects', the outermost
+last.  Each function in `bb-transient-layers-functions` gets the current
+project's directory and returns `(LABEL . DIRECTORY)` pairs, outermost
+first:
 
 ```elisp
 (add-hook 'bb-transient-layers-functions

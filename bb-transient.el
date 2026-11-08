@@ -624,8 +624,9 @@ The last is ROOT, labelled by its directory name unless a function in
 
 (defun bb-transient--setup (root &optional refresh)
   "Define the top menu for ROOT and its layers, and return its symbol.
-A group per layer, outermost first.  Keys go to the innermost layer
-first, so ROOT's tasks get the letters of their names.  A layer whose
+A group per layer, ROOT's first and the outermost last.  Keys go to the
+innermost layer first, so ROOT's tasks get the letters of their names.
+A layer whose
 tasks can't be read is left out, unless it is ROOT.  REFRESH also
 recompiles the defaults and hooks, and requires hook namespaces again."
   (when refresh
@@ -662,10 +663,11 @@ recompiles the defaults and hooks, and requires hook namespaces again."
                 groups))))
     (put sym 'bb-transient-root root)
     (put sym 'bb-transient-layers layers)
+    ;; Built innermost first for the keys; shown innermost first too.
     (eval
      `(transient-define-prefix ,sym ()
         "bb tasks"
-        ,@groups
+        ,@(nreverse groups)
         [("g" "Refresh" bb-transient-refresh :transient nil)])
      t)
     sym))
