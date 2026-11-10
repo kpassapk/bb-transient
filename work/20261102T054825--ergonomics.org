@@ -6,7 +6,7 @@
 
 This package should provide a good base experience, for bb projects.
 
-* Shipped
+* Shipped :bb_transient:
 
 ** Bug: project-switch-commands opened the wrong project
 
@@ -63,6 +63,8 @@ In some cases, I want to drive my workflow with agents, and in the
 forge can only see commands that are in source code blocks. If I
 execute something from a transient, it's not visible to the agent.
 
+Known issue: 'g' seems to break things
+
 *** Proposal
 
 - =w= in every options menu, next to =RET=: copies the command line
@@ -76,6 +78,17 @@ execute something from a transient, it's not visible to the agent.
   for your own glue (an org block, a forge message).
 
 No need to insert a =#+begin_src sh= block yet
+
+*** Result
+Branch =copy-cmd=, on =ergonomics-improvements=:
+- 00dc8e7 Copy the command line instead of running it
+
+- =_= in every options menu copies what =RET= would run (defaults from point included, before hook not called).
+- =_= in the top menu toggles "copy instead of run" for the next command picked; bare leaves copy their line. The flag clears when the last menu exits (=transient-exit-hook=, only when no prefix is still active). =RET= in an options menu also copies while the flag is on.
+- =bb-transient-command-line PATH &optional ARGS PROJECT= returns the string.
+- README section and three ERT tests added.
+
+Not run: =bb test= / =bb compile=: there is no =emacs= in this sandbox, so the code and tests are unexecuted. Please run =bb ci= on the host. In particular check that the exit hook clears the flag when moving between a submenu and its parent.
 
 ** Other inputs
 
