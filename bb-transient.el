@@ -275,8 +275,10 @@ leaf becomes a command that runs straight away."
      (t (defalias sym
           (lambda (&optional flip)
             (interactive "P")
-            (bb-transient--run root path nil (xor terminal flip)
-                               (get sym 'bb-transient-hooks)))
+            (if bb-transient--copy
+                (bb-transient--copy root path nil)
+              (bb-transient--run root path nil (xor terminal flip)
+                                 (get sym 'bb-transient-hooks))))
           (alist-get 'doc node))))
     sym))
 
@@ -300,7 +302,7 @@ leaf becomes a command that runs straight away."
 
 (defun bb-transient--define-leaf (sym node options)
   "Define SYM as an options menu for leaf NODE with OPTIONS."
-  (let* ((taken '("-=" "RET"))
+  (let* ((taken '("-=" "RET" "w"))
          (infixes (mapcar (lambda (opt)
                             (let ((s (bb-transient--option-suffix opt taken)))
                               (push (car s) taken)
@@ -318,6 +320,7 @@ leaf becomes a command that runs straight away."
          ,@infixes
          ("-=" "Extra arguments" "++=" :prompt "Extra arguments: ")]
         [("RET" "Run" bb-transient-run-current)
+         ("w" "Copy command" bb-transient-copy-current)
          ("t" "In a terminal" "++terminal")])
      t)))
 
@@ -531,6 +534,29 @@ With CONFIG, a bb.edn file, pass it as --config."
                      path args)
              " "))
 
+;; Copying a command instead of running it, for driving a workflow
+;; from outside Emacs: an agent only sees commands in source blocks.
+
+(defvar bb-transient--copy nil
+  "Non-nil when the next command picked is copied, not run.
+Set from the top menu; cleared when the menu exits.")
+
+(defun bb-transient--clear-copy ()
+  "Clear `bb-transient--copy' once no menu is left open."
+  (unless transient--prefix
+    (setq bb-transient--copy nil)))
+
+(add-hook 'transient-exit-hook #'bb-transient--clear-copy)
+
+(defun bb-transient--copy (root path args)
+  "Put the command line for bb PATH with ARGS in ROOT on the kill ring.
+It is the line a run would use, but no before hook is called, as it
+can have effects.  Return the line."
+  (let ((line (bb-transient--line root path args)))
+    (kill-new line)
+    (message "Copied: %s" line)
+    line))
+
 (defvar bb-transient--menu-directory nil
   "Where commands run from, decided when the menu opened, or nil.
 Set by `bb-transient': `bb-transient-directory-function' has to be
@@ -544,6 +570,15 @@ The directory the open menu decided on, else
    (or bb-transient--menu-directory
        (ignore-errors (funcall bb-transient-directory-function))
        root)))
+
+(defun bb-transient--line (root path args)
+  "The command line for bb PATH with ARGS, run from project ROOT's bb.edn.
+The directory is the one `bb-transient--run' would use, so ROOT's bb.edn
+is passed as --config when that is not ROOT."
+  (let ((dir (bb-transient--directory root)))
+    (bb-transient--command path args
+                           (unless (file-equal-p dir root)
+                             (expand-file-name "bb.edn" root)))))
 
 (defun bb-transient--run (root path args &optional terminal hooks)
   "Run bb PATH with ARGS, using ROOT's bb.edn, and return the output buffer.
@@ -588,6 +623,14 @@ returns nil."
                                args hooks origin))
         buf))))
 
+(defun bb-transient-command-line (path &optional args project)
+  "The shell command line for bb task PATH (a list of names) with ARGS.
+PROJECT is the directory whose bb.edn defines the task; nil means the
+current project.  Nothing is run.  For your own glue, such as an org
+block or a message to an agent."
+  (let ((bb-transient--menu-directory nil))
+    (bb-transient--line (or project (bb-transient-project)) path args)))
+
 (defun bb-transient-run (path &optional args project terminal)
   "Run bb task PATH (a list of names) with ARGS and return its buffer.
 PROJECT is the directory whose bb.edn defines the task; nil means the
@@ -596,21 +639,45 @@ a compilation buffer, or with TERMINAL a `ghostel-compile' one."
   (let ((bb-transient--menu-directory nil))
     (bb-transient--run (or project (bb-transient-project)) path args terminal)))
 
-(transient-define-suffix bb-transient-run-current ()
-  "Run the command the current menu describes."
-  (interactive)
+(defun bb-transient--current-args ()
+  "The current options menu's bb arguments, or signal if one is missing."
   (let* ((sym transient-current-command)
-         (raw (transient-args sym))
-         (args (bb-transient--args raw))
+         (args (bb-transient--args (transient-args sym)))
          (missing (bb-transient--missing (get sym 'bb-transient-options) args)))
     (when missing
       (user-error "Required: %s"
                   (mapconcat (lambda (n) (concat "--" n)) missing ", ")))
-    (bb-transient--run (get sym 'bb-transient-root)
-                       (get sym 'bb-transient-path)
-                       args
-                       (member "++terminal" raw)
-                       (get sym 'bb-transient-hooks))))
+    args))
+
+(transient-define-suffix bb-transient-run-current ()
+  "Run the command the current menu describes.
+When the top menu asked for copying, copy it instead."
+  (interactive)
+  (if bb-transient--copy
+      (bb-transient-copy-current)
+    (let ((sym transient-current-command))
+      (bb-transient--run (get sym 'bb-transient-root)
+                         (get sym 'bb-transient-path)
+                         (bb-transient--current-args)
+                         (member "++terminal" (transient-args sym))
+                         (get sym 'bb-transient-hooks)))))
+
+(transient-define-suffix bb-transient-copy-current ()
+  "Copy the command line `bb-transient-run-current' would run.
+The before hook is not called."
+  (interactive)
+  (let ((sym transient-current-command))
+    (bb-transient--copy (get sym 'bb-transient-root)
+                        (get sym 'bb-transient-path)
+                        (bb-transient--current-args))))
+
+(transient-define-suffix bb-transient-toggle-copy ()
+  "Copy the next command picked instead of running it."
+  :transient t
+  :description (lambda () (format "Copy instead of run: %s"
+                                  (if bb-transient--copy "on" "off")))
+  (interactive)
+  (setq bb-transient--copy (not bb-transient--copy)))
 
 ;;;; Entry points
 
@@ -651,7 +718,7 @@ defaults and hooks, and requires hook namespaces again."
          (layers (bb-transient--layers root))
          (sym (intern (format "bb-transient:%s"
                               (substring (md5 (prin1-to-string layers)) 0 6))))
-         (taken (list "q" "g"))
+         (taken (list "q" "g" "w"))
          seen found groups)
     ;; Innermost first, so its tasks hide an outer layer's; `found' ends
     ;; up outermost first, which is the order the keys are given in.
@@ -687,7 +754,8 @@ defaults and hooks, and requires hook namespaces again."
      `(transient-define-prefix ,sym ()
         "bb tasks"
         ,@groups
-        [("g" "Refresh" bb-transient-refresh :transient nil)])
+        [("g" "Refresh" bb-transient-refresh :transient nil)
+         ("w" bb-transient-toggle-copy)])
      t)
     sym))
 

@@ -190,6 +190,19 @@ Of course, `bb` reads `bb.edn` too, which limits what a form can say:
 A form longer than a couple of lines reads better in a cljbang file
 called from bb.edn.
 
+## Copying a command
+
+A command run from a menu leaves no trace an agent can read. `w` copies
+the command line instead of running it:
+
+- In an options menu, `w` copies what `RET` would run, with the defaults
+  from point filled in. The before hook is not called, as it can have
+  effects.
+- A bare leaf runs on its key, so in the top menu `w` turns on "copy
+  instead of run" for the next command picked, in any submenu. It is
+  cleared when the menu exits.
+- From Lisp, `(bb-transient-command-line PATH ARGS)` returns the string.
+
 ## Project function
 
 Which project's menu opens is up to `bb-transient-project-function`

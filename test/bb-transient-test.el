@@ -488,4 +488,34 @@
              out))
     (kill-buffer buf)))
 
+;;;; Copying
+
+(ert-deftest bb-transient-test-command-line ()
+  (let ((default-directory bb-transient-test--fixture))
+    (should (equal (bb-transient-command-line '("greet" "hello") '("--name=Ann Lee"))
+                   "bb greet hello --name=Ann\\ Lee"))
+    (should (equal (bb-transient-command-line '("outer") nil bb-transient-test--outer)
+                   (format "bb --config %sbb.edn outer"
+                           bb-transient-test--outer)))))
+
+(ert-deftest bb-transient-test-copy-leaf-no-run ()
+  (let* ((root bb-transient-test--fixture)
+         (default-directory root)
+         (deep (bb-transient--sym root '("greet" "nested" "deep")))
+         (kill-ring nil)
+         (bb-transient--copy t)
+         (compile-hook-called nil))
+    (bb-transient--setup root t)
+    (cl-letf (((symbol-function 'compile)
+               (lambda (&rest _) (setq compile-hook-called t))))
+      (funcall deep))
+    (should-not compile-hook-called)
+    (should (equal (car kill-ring) "bb greet nested deep"))))
+
+(ert-deftest bb-transient-test-copy-flag-cleared-on-exit ()
+  (let ((bb-transient--copy t)
+        (transient--prefix nil))
+    (bb-transient--clear-copy)
+    (should-not bb-transient--copy)))
+
 ;;; bb-transient-test.el ends here
