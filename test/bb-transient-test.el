@@ -191,6 +191,38 @@
                             (expand-file-name "bb/" bb-transient-test--fixture))))
     (kill-buffer buf)))
 
+(defvar project-current-directory-override)
+
+(ert-deftest bb-transient-test-project-switch ()
+  ;; `project-switch-project' binds the override around the command;
+  ;; the menu is for that project, and runs from it after the override
+  ;; is gone.
+  (let* ((bb-transient-use-comint nil)
+         (other (file-name-as-directory (make-temp-file "bb-transient-other" t)))
+         (default-directory other)
+         opened)
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "bb.edn" other) (insert "{}"))
+          (cl-letf (((symbol-function 'transient-setup)
+                     (lambda (sym &rest _) (setq opened sym))))
+            (let ((project-current-directory-override bb-transient-test--fixture))
+              (should (file-equal-p (bb-transient-project-root)
+                                    bb-transient-test--fixture))
+              (bb-transient)))
+          (should (file-equal-p (get opened 'bb-transient-root)
+                                bb-transient-test--fixture))
+          (let ((buf (bb-transient--run bb-transient-test--fixture
+                                        '("greet" "hello") '("--name=ert"))))
+            (let ((out (bb-transient-test--wait buf)))
+              (should-not (string-match-p "--config" out))
+              (should (string-match-p "hello ert" out)))
+            (with-current-buffer buf
+              (should (file-equal-p default-directory bb-transient-test--fixture)))
+            (kill-buffer buf)))
+      (setq bb-transient--menu-directory nil)
+      (delete-directory other t))))
+
 ;;;; Defaults from point
 
 (defmacro bb-transient-test--in-task (&rest body)

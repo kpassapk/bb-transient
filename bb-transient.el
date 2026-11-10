@@ -128,10 +128,15 @@ Commands still run from the current project; see
 (defvar bb-transient--cache (make-hash-table :test #'equal)
   "Project root -> (MTIME . RESULT), RESULT the parsed introspection.")
 
+(defvar project-current-directory-override)
+
 (defun bb-transient-project-root (&optional directory)
   "The directory holding the nearest bb.edn at or above DIRECTORY, or signal.
-DIRECTORY defaults to `default-directory'."
-  (let ((dir (or directory default-directory)))
+DIRECTORY defaults to `project-current-directory-override' when that is
+set, as `project-switch-project' does, else `default-directory'."
+  (let ((dir (or directory
+                 (bound-and-true-p project-current-directory-override)
+                 default-directory)))
     (expand-file-name
      (or (locate-dominating-file dir "bb.edn")
          (user-error "No bb.edn in %s or above" dir)))))
@@ -526,11 +531,19 @@ With CONFIG, a bb.edn file, pass it as --config."
                      path args)
              " "))
 
+(defvar bb-transient--menu-directory nil
+  "Where commands run from, decided when the menu opened, or nil.
+Set by `bb-transient': `bb-transient-directory-function' has to be
+asked while the menu's buffer and any project override are current.")
+
 (defun bb-transient--directory (root)
   "Where to run a command from project ROOT's bb.edn.
-See `bb-transient-directory-function'; ROOT when it has no answer."
+The directory the open menu decided on, else
+`bb-transient-directory-function'; ROOT when it has no answer."
   (expand-file-name
-   (or (ignore-errors (funcall bb-transient-directory-function)) root)))
+   (or bb-transient--menu-directory
+       (ignore-errors (funcall bb-transient-directory-function))
+       root)))
 
 (defun bb-transient--run (root path args &optional terminal hooks)
   "Run bb PATH with ARGS, using ROOT's bb.edn, and return the output buffer.
@@ -580,7 +593,8 @@ returns nil."
 PROJECT is the directory whose bb.edn defines the task; nil means the
 current project.  It runs from `bb-transient-directory-function', in
 a compilation buffer, or with TERMINAL a `ghostel-compile' one."
-  (bb-transient--run (or project (bb-transient-project)) path args terminal))
+  (let ((bb-transient--menu-directory nil))
+    (bb-transient--run (or project (bb-transient-project)) path args terminal)))
 
 (transient-define-suffix bb-transient-run-current ()
   "Run the command the current menu describes."
@@ -690,7 +704,10 @@ defaults and hooks, and requires hook namespaces again."
 The project is the one `bb-transient-project-function' returns.
 Projects named by `bb-transient-layers-functions' get groups too."
   (interactive)
-  (transient-setup (bb-transient--setup (bb-transient-project))))
+  (let ((sym (bb-transient--setup (bb-transient-project))))
+    (setq bb-transient--menu-directory
+          (ignore-errors (funcall bb-transient-directory-function)))
+    (transient-setup sym)))
 
 (provide 'bb-transient)
 ;;; bb-transient.el ends here
