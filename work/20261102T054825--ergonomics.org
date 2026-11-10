@@ -1,3 +1,4 @@
+#+TARGET: bb_transient ~/src/github.com/kpassapk/bb-transient
 #+TITLE: ergonomics
 #+CATEGORY: work
 
@@ -5,42 +6,20 @@
 
 This package should provide a good base experience, for bb projects.
 
-* Issues
+* Shipped
 
-** Fix project-switch-commands example
+** Bug: project-switch-commands opened the wrong project
 
-README.md:
-
-#+begin_src elisp
-  (add-to-list 'project-switch-commands '(bb-transient "bb tasks" ?b))
-#+end_src
-
-incorrectly opens the current project's =bb.edn= and not the one for the project we are switching to.
-
-*** Proposal
-
-In batch Emacs, with =project-current-directory-override=
-set to project B, =bb-transient-project= still returns A.
-=project-switch-project= (Emacs 31) sets that override buffer-locally
-and kills it when the command returns, and bb-transient never reads it:
-=bb-transient-project-root= starts from =default-directory=.
-
-A second problem the README can't fix: =transient-setup= returns at
-once, so by the time RET runs, the override is gone, and
-=bb-transient-directory-function= (called at run time) answers A again.
-B's tasks would run in A with =--config B/bb.edn=.
-
-Fix in the code, not just the README:
-- =bb-transient-project-root= starts from
-  =project-current-directory-override= when it is set.
-- The directory commands run from is decided when the menu opens and
-  kept on the menu (as =bb-transient-root= already is), not
-  recomputed at run time.
-- A test that opens the menu with the override set and checks both.
-The README line then works as written.
-
+=project-switch-project= would not show the transient for the selected
+project, but rather for the current project.
 
 * Improvements
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   ergonomics-improvements
+:BASE:     main
+:ID:       629E1E62-4F12-4F0F-A77F-51C01C09E4DB
+:END:
 
 ** Silence output
 
@@ -73,17 +52,18 @@ or on the =:exec-fn='s metadata.
 - After hooks still get =:out=.
 
 ** Copy command
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:BRANCH:   copy-cmd
+:BASE:     ergonomics-improvements
+:ID:       F006E73A-32FD-4EBA-BA23-34218A6E5BD0
+:END:
 
 In some cases, I want to drive my workflow with agents, and in the
 forge can only see commands that are in source code blocks. If I
 execute something from a transient, it's not visible to the agent.
 
 *** Proposal
-
-=transient-history= holds infix values, not command lines, so a hook
-can't rebuild the command without redoing what =bb-transient--run=
-does (layers' =--config=, extra args, =++terminal=). Better a small
-feature than docs:
 
 - =w= in every options menu, next to =RET=: copies the command line
   =RET= would run (=bb-transient--command=), with defaults from point
@@ -95,7 +75,7 @@ feature than docs:
 - From Lisp: =bb-transient-command-line PATH ARGS= returns the string,
   for your own glue (an org block, a forge message).
 
-Whether it also inserts an =#+begin_src sh= block is question 3 above.
+No need to insert a =#+begin_src sh= block yet
 
 ** Other inputs
 
@@ -177,194 +157,3 @@ on an option in its spec map (=:bb-transient/key "-f"=, overriding
   key.
 - Multi-key sequences (="w c"=) work, as transient allows them.
 
-
-* Chunk 1 :local:
-:PROPERTIES:
-:ID:       EA819698-1453-4E59-98CB-3DFDF2C3EB38
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-approach-1
-:IMAGE:    bb-claude-emacs
-:BASE:     main
-:END:
-
-Start the two children: =ergonomics-project-switch= (606E2F3A) and
-=ergonomics-copy= (E637E0B9), both based on =ergonomics-approach-1=.
-
-#+begin_src sh :results output
-atomforge sandbox up 606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
-atomforge agent start 606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
-#+end_src
-
-
-#+begin_src sh :results output
-atomforge sandbox up E637E0B9-E49A-47EF-8EA7-8F6707A0096F
-atomforge agent start E637E0B9-E49A-47EF-8EA7-8F6707A0096F
-#+end_src
-
-Check on them.
-
-#+begin_src sh :results output
-atomforge  agent status
-#+end_src
-
-** project-switch-commands opens the wrong project
-:PROPERTIES:
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-project-switch
-:BASE:     ergonomics-approach-1
-:IMAGE:    bb-claude-emacs
-:AGENT:    sonnet
-:ID:       606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
-:END:
-
-Show transient for right project in =project-switch-project=
-
-#+TARGET: checkout ~/src/github.com/kpassapk/bb-transient-ergonomics-project-switch
-
-*** Test it 
-
-1. Land
-2. Checkout
-3. Eval elisp file
-4. Switch project
-
-** Copy a command line :local:
-:PROPERTIES:
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-copy
-:BASE:     ergonomics-approach-1
-:IMAGE:    bb-claude-emacs
-:AGENT:    sonnet
-:END:
-
-Build a command in the menu, with defaults from point as now, and copy
-it instead of running it, to paste into an org src block where an
-agent can see it.
-
-- =w= in every options menu, next to =RET=: =kill-new= the command
-  line =RET= would run (=bb-transient--command=: =bb=, =--config= for
-  another layer's task, the path, the args, extra args split), and
-  say so in a message. The command line only: no =cd=, no src block.
-- The before hook is not called (it can have effects).
-- Required options are checked as for =RET=.
-- Bare leaves run on their key, so =w= in the top menu sets "copy
-  instead of run" for the next command picked, in any submenu, shown
-  in the menu while on; cleared when the menu exits. The options
-  menu's =RET= honours it too.
-- =bb-transient-command-line PATH &optional ARGS PROJECT= returns the
-  string, for Lisp.
-- Built-ins: top menu =q= =g= =w=; options menu =RET= =t= =s= =w= =-==.
-- Tests and a README section. =bb ci= passes.
-
- TODO Batch 2
-* TODO Chunk 2
-** Explicit keys
-:PROPERTIES:
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-explicit-keys
-:BASE:     ergonomics-approach
-:IMAGE:    bb-claude-emacs
-:END:
-
-=:bb-transient/key "z"= on a command (task map or =:exec-fn=
-metadata; the task map wins, as for =:bb-transient/terminal=), and in
-an option's spec map (=:bb-transient/key "-f"=, overriding =:alias=).
-
-- Explicit keys are placed first in a menu, then the rest get auto
-  keys from what is left.
-- Two explicit keys clashing in one menu, or one on a built-in: a
-  message, and the later one gets an auto key.
-- Built-ins, reserved now even where the feature isn't there yet:
-  top menu =q= =g= =w=; options menu =RET= =t= =s= =w= =-==.
-- Multi-key sequences work, as transient allows them.
-
-** Order and groups
-:PROPERTIES:
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-order
-:BASE:     ergonomics-approach
-:IMAGE:    bb-claude-emacs
-:END:
-
-The menu follows bb.edn order (=bb-transient.clj= reads it with
-rewrite-clj). But a =:cmd= table held in a var is an evaluated map,
-and a Clojure map with more than 8 entries is a hash map in arbitrary
-order; the same for a =:spec= map on fn metadata with more than 8
-options. That is why related commands (=work start= / =stop=) end up
-apart.
-
-- For a var-held =:cmd= table, and a map =:spec= on fn metadata, find
-  the =def= / =defn= from the var's =:file= and =:line= and read the
-  literal with rewrite-clj to recover source order. Fall back to the
-  evaluated order when the source can't be read.
-- =:bb-transient/group "Lifecycle"= on a command puts it in a column
-  with that heading; commands without one stay in the first,
-  unlabelled column; columns in order of first appearance. In the
-  style of https://github.com/kickingvegas/casual.
-- README sections for keys and groups.
-
-** Quiet commands
-:PROPERTIES:
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-quiet
-:BASE:     ergonomics-approach
-:IMAGE:    bb-claude-emacs
-:END:
-
-Many commands' output only matters when they fail or prompt. A
-per-command flag, set like =:bb-transient/terminal= (task map or
-=:exec-fn= metadata, the task map winning):
-
-#+begin_src clojure
-snapshot {:exec-fn work/snapshot :bb-transient/quiet true}
-#+end_src
-
-- The command runs in its usual =*bb ...*= buffer, not displayed
-  (=display-buffer-no-window= around =compile=). The buffer is kept,
-  as now, to look at later.
-- Exit non-zero: the buffer is displayed.
-- Exit 0: a message, =bb work snapshot: done=.
-- Asked for input: when the process has written a partial line (no
-  trailing newline) and then been silent ~0.3 s while still alive,
-  display the buffer. A heuristic; say so in the README.
-- =s= ("silent") in the options menu, next to =t=, flips it for one
-  run. Bare leaves: no flip for now.
-- Terminal commands ignore it.
-- After hooks still get =:out= and =:exit=.
-- Options-menu built-ins: =RET= =t= =s= =w= =-==; don't take others.
-- Tests with the fixture: a quiet command that succeeds shows no
-  window, one that fails does. README section. =bb ci= passes.
-
-** Option readers and choices
-:PROPERTIES:
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-inputs
-:BASE:     ergonomics-approach
-:IMAGE:    bb-claude-emacs
-:END:
-
-Let an option's spec say how its value is read. babashka.cli ignores
-keys it doesn't know, so they go in the option's spec map:
-
-#+begin_src clojure
-{:spec {:due  {:desc "Due date" :bb-transient/read :date}
-        :dir  {:desc "Where"    :bb-transient/read :directory}
-        :env  {:desc "Env"      :bb-transient/choices ["dev" "staging" "prod"]}
-        :book {:desc "Book"     :bb-transient/choices (el/my-books)}}}
-#+end_src
-
-- =:bb-transient/read=: =:date= (=transient-read-date=, the
-  calendar), =:file=, =:directory=, =:number= (transient's own
-  readers).
-- =:bb-transient/choices=: a vector, sent as is by
-  =bb-transient.clj=; or a cljbang form, sent as a string and
-  evaluated in Emacs each time the option is set, in the buffer the
-  menu was opened from, trusted like =:bb-transient/defaults=
-  (=bb-transient-eval-hooks=). On fn metadata a form is quoted, as
-  for defaults. No bb-side fn.
-- Choices are offered with =completing-read=, not enforced: another
-  value can be typed.
-- Without cljbang, or untrusted, a form gives no choices and the
-  option reads plain text.
-- Tests (the cljbang ones skip without =CLJBANG=, as now) and a README
-  section. =bb ci= passes.
