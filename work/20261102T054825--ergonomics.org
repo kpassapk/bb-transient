@@ -242,7 +242,6 @@ old project: the new project's tasks would run in the old one with
 :BRANCH:   ergonomics-copy
 :BASE:     ergonomics-approach-1
 :IMAGE:    bb-claude-emacs
-:ID:       E637E0B9-E49A-47EF-8EA7-8F6707A0096F
 :AGENT:    sonnet
 :END:
 
