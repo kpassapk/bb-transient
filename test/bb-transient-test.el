@@ -518,4 +518,14 @@
     (bb-transient--clear-copy)
     (should-not bb-transient--copy)))
 
+(ert-deftest bb-transient-test-copy-flag-kept-on-refresh ()
+  (let ((bb-transient--copy t)
+        (bb-transient--keep-copy t)
+        (transient--prefix nil))
+    (bb-transient--clear-copy)
+    (should bb-transient--copy)
+    ;; Only the refresh's own exit; the next one clears it.
+    (bb-transient--clear-copy)
+    (should-not bb-transient--copy)))
+
 ;;; bb-transient-test.el ends here

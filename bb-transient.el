@@ -541,10 +541,14 @@ With CONFIG, a bb.edn file, pass it as --config."
   "Non-nil when the next command picked is copied, not run.
 Set from the top menu; cleared when the menu exits.")
 
+(defvar bb-transient--keep-copy nil
+  "Non-nil when the next menu exit is a refresh, which keeps the copy flag.")
+
 (defun bb-transient--clear-copy ()
-  "Clear `bb-transient--copy' once no menu is left open."
-  (unless transient--prefix
-    (setq bb-transient--copy nil)))
+  "Clear `bb-transient--copy' once no menu is left open.
+A refresh closes the menu only to reopen it, so it keeps the flag."
+  (cond (bb-transient--keep-copy (setq bb-transient--keep-copy nil))
+        ((not transient--prefix) (setq bb-transient--copy nil))))
 
 (add-hook 'transient-exit-hook #'bb-transient--clear-copy)
 
@@ -764,6 +768,7 @@ defaults and hooks, and requires hook namespaces again."
   (interactive)
   (let ((root (or (get transient-current-command 'bb-transient-root)
                   (bb-transient-project))))
+    (setq bb-transient--keep-copy bb-transient--copy)
     (transient-setup (bb-transient--setup root t))))
 
 ;;;###autoload
@@ -773,7 +778,8 @@ The project is the one `bb-transient-project-function' returns.
 Projects named by `bb-transient-layers-functions' get groups too."
   (interactive)
   (let ((sym (bb-transient--setup (bb-transient-project))))
-    (setq bb-transient--menu-directory
+    (setq bb-transient--keep-copy nil
+          bb-transient--menu-directory
           (ignore-errors (funcall bb-transient-directory-function)))
     (transient-setup sym)))
 
