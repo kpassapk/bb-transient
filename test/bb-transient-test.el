@@ -492,8 +492,10 @@
 
 (ert-deftest bb-transient-test-command-line ()
   (let ((default-directory bb-transient-test--fixture))
-    (should (equal (bb-transient-command-line '("greet" "hello") '("--name=Ann Lee"))
-                   "bb greet hello --name=Ann\\ Lee"))
+    ;; Emacs 32's `shell-quote-argument' also escapes "=".
+    (should (member (bb-transient-command-line '("greet" "hello") '("--name=Ann Lee"))
+                    '("bb greet hello --name=Ann\\ Lee"
+                      "bb greet hello --name\\=Ann\\ Lee")))
     (should (equal (bb-transient-command-line '("outer") nil bb-transient-test--outer)
                    (format "bb --config %sbb.edn outer"
                            bb-transient-test--outer)))))
