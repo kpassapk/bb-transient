@@ -128,6 +128,10 @@ Commands still run from the current project; see
 (defvar bb-transient--cache (make-hash-table :test #'equal)
   "Project root -> (MTIME . RESULT), RESULT the parsed introspection.")
 
+(defvar bb-transient--copy nil
+  "Non-nil when the next command picked is copied, not run.
+Set from the top menu; cleared when the menu exits.")
+
 (defvar project-current-directory-override)
 
 (defun bb-transient-project-root (&optional directory)
@@ -536,10 +540,6 @@ With CONFIG, a bb.edn file, pass it as --config."
 
 ;; Copying a command instead of running it, for driving a workflow
 ;; from outside Emacs: an agent only sees commands in source blocks.
-
-(defvar bb-transient--copy nil
-  "Non-nil when the next command picked is copied, not run.
-Set from the top menu; cleared when the menu exits.")
 
 (defun bb-transient--clear-copy ()
   "Clear `bb-transient--copy' once no menu is left open."
