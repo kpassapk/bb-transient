@@ -192,13 +192,13 @@ called from bb.edn.
 
 ## Copying a command
 
-A command run from a menu leaves no trace an agent can read. `w` copies
+A command run from a menu leaves no trace an agent can read. `_` copies
 the command line instead of running it:
 
-- In an options menu, `w` copies what `RET` would run, with the defaults
+- In an options menu, `_` copies what `RET` would run, with the defaults
   from point filled in. The before hook is not called, as it can have
   effects.
-- A bare leaf runs on its key, so in the top menu `w` turns on "copy
+- A bare leaf runs on its key, so in the top menu `_` turns on "copy
   instead of run" for the next command picked, in any submenu. It is
   cleared when the menu exits.
 - From Lisp, `(bb-transient-command-line PATH ARGS)` returns the string.

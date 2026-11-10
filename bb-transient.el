@@ -302,7 +302,7 @@ leaf becomes a command that runs straight away."
 
 (defun bb-transient--define-leaf (sym node options)
   "Define SYM as an options menu for leaf NODE with OPTIONS."
-  (let* ((taken '("-=" "RET" "w"))
+  (let* ((taken '("-=" "RET" "_"))
          (infixes (mapcar (lambda (opt)
                             (let ((s (bb-transient--option-suffix opt taken)))
                               (push (car s) taken)
@@ -320,7 +320,7 @@ leaf becomes a command that runs straight away."
          ,@infixes
          ("-=" "Extra arguments" "++=" :prompt "Extra arguments: ")]
         [("RET" "Run" bb-transient-run-current)
-         ("w" "Copy command" bb-transient-copy-current)
+         ("_" "Copy command" bb-transient-copy-current)
          ("t" "In a terminal" "++terminal")])
      t)))
 
@@ -718,7 +718,7 @@ defaults and hooks, and requires hook namespaces again."
          (layers (bb-transient--layers root))
          (sym (intern (format "bb-transient:%s"
                               (substring (md5 (prin1-to-string layers)) 0 6))))
-         (taken (list "q" "g" "w"))
+         (taken (list "q" "g" "_"))
          seen found groups)
     ;; Innermost first, so its tasks hide an outer layer's; `found' ends
     ;; up outermost first, which is the order the keys are given in.
@@ -755,7 +755,7 @@ defaults and hooks, and requires hook namespaces again."
         "bb tasks"
         ,@groups
         [("g" "Refresh" bb-transient-refresh :transient nil)
-         ("w" bb-transient-toggle-copy)])
+         ("_" bb-transient-toggle-copy)])
      t)
     sym))
 
