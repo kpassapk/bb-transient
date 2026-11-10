@@ -217,24 +217,16 @@ atomforge  agent status
 :ID:       606E2F3A-DFAC-47A0-A72B-F291BC5AF3F0
 :END:
 
-README.md:91 suggests
-=(add-to-list 'project-switch-commands '(bb-transient "bb tasks" ?b))=.
-It opens the current project's menu, not the one switched to.
-=project-switch-project= (Emacs 31) sets
-=project-current-directory-override= buffer-locally around the
-command, and bb-transient never reads it. Also, =transient-setup=
-returns at once, so when RET runs, the override is gone and
-=bb-transient-directory-function= (called at run time) answers the
-old project: the new project's tasks would run in the old one with
-=--config=.
+Show transient for right project in =project-switch-project=
 
-- =bb-transient-project-root= starts from
-  =project-current-directory-override= when it is non-nil.
-- The directory commands run from is decided when the menu opens and
-  kept on the menu, like =bb-transient-root=, not recomputed at run
-  time.
-- A test that opens the menu with the override set and checks the
-  project and the run directory.
+#+TARGET: checkout ~/src/github.com/kpassapk/bb-transient-ergonomics-project-switch
+
+*** Test it 
+
+1. Land
+2. Checkout
+3. Eval elisp file
+4. Switch project
 
 ** Copy a command line :local:
 :PROPERTIES:
