@@ -25,6 +25,15 @@
 (defun bb-transient-test--find (name nodes)
   (seq-find (lambda (n) (equal (alist-get 'name n) name)) nodes))
 
+(defun bb-transient-test--open (root path)
+  "The command for PATH in ROOT, with the menus down to it defined.
+As pressing their keys would; `bb-transient--setup' must have run."
+  (let ((n 0))
+    (while (< n (length path))
+      (setq n (1+ n))
+      (bb-transient--realize (bb-transient--sym root (take n path)))))
+  (bb-transient--sym root path))
+
 ;;;; Introspection (needs bb on PATH)
 
 (ert-deftest bb-transient-test-tree-order-and-privacy ()
@@ -63,14 +72,69 @@
 (ert-deftest bb-transient-test-setup-defines-menus ()
   (let* ((root bb-transient-test--fixture)
          (top (bb-transient--setup root t))
-         (hello (bb-transient--sym root '("greet" "hello")))
-         (deep (bb-transient--sym root '("greet" "nested" "deep"))))
+         (hello (bb-transient-test--open root '("greet" "hello")))
+         (deep (bb-transient-test--open root '("greet" "nested" "deep"))))
     (should (get top 'transient--prefix))
     (should (get hello 'transient--prefix))
     (should (equal (get hello 'bb-transient-path) '("greet" "hello")))
     ;; A leaf without options is a plain command, not a menu.
     (should (commandp deep))
     (should-not (get deep 'transient--prefix))))
+
+(ert-deftest bb-transient-test-setup-lazy ()
+  "A submenu is defined when it is opened, not with the top menu."
+  (let* ((root bb-transient-test--fixture)
+         (_ (bb-transient--setup root t))
+         (greet (bb-transient--sym root '("greet")))
+         (hello (bb-transient--sym root '("greet" "hello")))
+         ;; Other tests may have defined them before.
+         (layout (get greet 'transient--layout)))
+    (put hello 'bb-transient-stub 'untouched)
+    ;; A stub, which transient still takes for a submenu.
+    (should (get greet 'bb-transient-stub))
+    (should (get greet 'transient--prefix))
+    ;; Opening it defines it, and stubs its children.
+    (cl-letf (((symbol-function 'transient-setup) #'ignore))
+      (call-interactively greet))
+    (should-not (get greet 'bb-transient-stub))
+    (should-not (eq (get greet 'transient--layout) layout))
+    (should (eq (get hello 'bb-transient-stub) t))))
+
+(ert-deftest bb-transient-test-setup-reuses-menu ()
+  "The top menu is defined again only when what it shows changed."
+  (let* ((dir (file-name-as-directory (make-temp-file "bb-transient-reuse" t)))
+         (edn (expand-file-name "bb.edn" dir))
+         (write (lambda (tasks mtime)
+                  (with-temp-file edn (insert (format "{:tasks {%s}}" tasks)))
+                  (set-file-times edn mtime))))
+    (unwind-protect
+        (progn
+          (funcall write "a {:task (println 1)}" '(0 1))
+          (let* ((top (bb-transient--setup dir))
+                 (layout (get top 'transient--layout)))
+            (should (eq (bb-transient--setup dir) top))
+            (should (eq (get top 'transient--layout) layout))
+            ;; Read again, but the same tasks: still the same menu.
+            (funcall write "a {:task (println 1)}" '(0 2))
+            (bb-transient--setup dir)
+            (should (eq (get top 'transient--layout) layout))
+            ;; A new task, and `g', define it again.
+            (funcall write "a {:task (println 1)} b {:task (println 2)}" '(0 3))
+            (bb-transient--setup dir)
+            (should-not (eq (get top 'transient--layout) layout))
+            (setq layout (get top 'transient--layout))
+            (bb-transient--setup dir t)
+            (should-not (eq (get top 'transient--layout) layout))))
+      (delete-directory dir t))))
+
+(ert-deftest bb-transient-test-setup-load-list ()
+  "Opening a menu again and again leaves `current-load-list' alone."
+  (let ((current-load-list nil)
+        (root bb-transient-test--fixture))
+    (bb-transient--setup root t)
+    (bb-transient-test--open root '("greet" "nested" "deep"))
+    (bb-transient--setup root t)
+    (should-not current-load-list)))
 
 ;; `:cmd some/var' names a var holding the table.
 (ert-deftest bb-transient-test-tree-cmd-var ()
@@ -95,8 +159,8 @@
 (ert-deftest bb-transient-test-setup-terminal-default ()
   (let* ((root bb-transient-test--fixture)
          (_ (bb-transient--setup root t))
-         (watch (bb-transient--sym root '("tui" "watch")))
-         (echo (bb-transient--sym root '("echo"))))
+         (watch (bb-transient-test--open root '("tui" "watch")))
+         (echo (bb-transient-test--open root '("echo"))))
     (should (equal (oref (get watch 'transient--prefix) default-value) '("++terminal")))
     (should-not (slot-boundp (get echo 'transient--prefix) 'default-value))))
 
@@ -302,8 +366,8 @@
   (skip-unless (require 'cljbang nil t))
   (let* ((root bb-transient-test--fixture)
          (_ (bb-transient--setup root t))
-         (echo (bb-transient--sym root '("echo")))
-         (watch (bb-transient--sym root '("tui" "watch")))
+         (echo (bb-transient-test--open root '("echo")))
+         (watch (bb-transient-test--open root '("tui" "watch")))
          (value (lambda (sym)
                   (let ((obj (clone (get sym 'transient--prefix))))
                     (bb-transient--init-value obj)
@@ -361,7 +425,7 @@
          (bb-transient-use-comint nil)
          (default-directory root))
     (bb-transient--run root path args nil
-                       (get (bb-transient--sym root path) 'bb-transient-hooks))))
+                       (get (bb-transient-test--open root path) 'bb-transient-hooks))))
 
 (ert-deftest bb-transient-test-before-rewrites-args ()
   (skip-unless (require 'cljbang nil t))
@@ -503,11 +567,11 @@
 (ert-deftest bb-transient-test-copy-leaf-no-run ()
   (let* ((root bb-transient-test--fixture)
          (default-directory root)
-         (deep (bb-transient--sym root '("greet" "nested" "deep")))
+         (_ (bb-transient--setup root t))
+         (deep (bb-transient-test--open root '("greet" "nested" "deep")))
          (kill-ring nil)
          (bb-transient--copy t)
          (compile-hook-called nil))
-    (bb-transient--setup root t)
     (cl-letf (((symbol-function 'compile)
                (lambda (&rest _) (setq compile-hook-called t))))
       (funcall deep))

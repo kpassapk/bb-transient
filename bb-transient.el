@@ -260,31 +260,63 @@ Prefers the letters of NAME in order, then any letter or digit."
         (list key desc (concat "--" name))
       (list key desc (concat "--" name "=")))))
 
+(defun bb-transient--eval (form)
+  "Evaluate FORM, a definition, leaving `current-load-list' alone.
+Outside `load' nothing empties that list, and `defalias' takes time in
+proportion to its length, so menus defined again on every open would
+make each open slower than the last."
+  (let ((current-load-list nil))
+    (eval form t)))
+
 (defun bb-transient--define (root path node)
-  "Define the command for NODE at PATH in ROOT and return its symbol.
-A node with children or options becomes a transient prefix; a bare
-leaf becomes a command that runs straight away."
+  "Declare the command for NODE at PATH in ROOT and return its symbol.
+A node with children or options becomes a transient prefix, but only
+when it is first opened: until then it is a stub; see
+`bb-transient--stub'.  A bare leaf becomes a command that runs
+straight away."
   (let ((sym (bb-transient--sym root path))
-        (children (alist-get 'children node))
-        (options (alist-get 'options node))
         (terminal (alist-get 'terminal node)))
     (put sym 'bb-transient-root root)
     (put sym 'bb-transient-path path)
-    (put sym 'bb-transient-options options)
+    (put sym 'bb-transient-node node)
+    (put sym 'bb-transient-options (alist-get 'options node))
     (put sym 'bb-transient-defaults (alist-get 'defaults node))
     (put sym 'bb-transient-hooks (bb-transient--hooks root node))
-    (cond
-     (children (bb-transient--define-menu sym root path node children))
-     (options (bb-transient--define-leaf sym node options))
-     (t (defalias sym
-          (lambda (&optional flip)
-            (interactive "P")
-            (if bb-transient--copy
-                (bb-transient--copy root path nil)
-              (bb-transient--run root path nil (xor terminal flip)
-                                 (get sym 'bb-transient-hooks))))
-          (alist-get 'doc node))))
+    (if (or (alist-get 'children node) (alist-get 'options node))
+        (bb-transient--stub sym)
+      (put sym 'transient--prefix nil)
+      (put sym 'bb-transient-stub nil)
+      (put sym 'function-documentation (alist-get 'doc node))
+      (fset sym (lambda (&optional flip)
+                  (interactive "P")
+                  (if bb-transient--copy
+                      (bb-transient--copy root path nil)
+                    (bb-transient--run root path nil (xor terminal flip)
+                                       (get sym 'bb-transient-hooks))))))
     sym))
+
+(defun bb-transient--stub (sym)
+  "Make SYM a prefix that defines its menu the first time it is opened.
+Transient tells a submenu from other suffixes by its `transient--prefix'
+property, so the stub has one, and the menu still stacks on its parent."
+  (put sym 'bb-transient-stub t)
+  (put sym 'function-documentation
+       (alist-get 'doc (get sym 'bb-transient-node)))
+  (put sym 'transient--prefix (transient-prefix :command sym))
+  (fset sym (lambda ()
+              (interactive)
+              (bb-transient--realize sym)
+              (transient-setup sym))))
+
+(defun bb-transient--realize (sym)
+  "Define the menu of SYM, a command from `bb-transient--define', if it is a stub."
+  (when (get sym 'bb-transient-stub)
+    (put sym 'bb-transient-stub nil)
+    (let ((node (get sym 'bb-transient-node)))
+      (if-let* ((children (alist-get 'children node)))
+          (bb-transient--define-menu sym (get sym 'bb-transient-root)
+                                     (get sym 'bb-transient-path) node children)
+        (bb-transient--define-leaf sym node (alist-get 'options node))))))
 
 (defun bb-transient--define-menu (sym root path node children)
   "Define SYM as a menu over CHILDREN of NODE at PATH in ROOT."
@@ -298,11 +330,10 @@ leaf becomes a command that runs straight away."
                              root (append path (list (alist-get 'name child))) child))))
                   children))
          (heading (concat "bb " (string-join path " "))))
-    (eval
+    (bb-transient--eval
      `(transient-define-prefix ,sym ()
         ,(or (alist-get 'doc node) heading)
-        [,heading ,@suffixes])
-     t)))
+        [,heading ,@suffixes]))))
 
 (defun bb-transient--define-leaf (sym node options)
   "Define SYM as an options menu for leaf NODE with OPTIONS."
@@ -313,7 +344,7 @@ leaf becomes a command that runs straight away."
                               s))
                           options))
          (heading (concat "bb " (string-join (get sym 'bb-transient-path) " "))))
-    (eval
+    (bb-transient--eval
      `(transient-define-prefix ,sym ()
         ,(or (alist-get 'doc node) heading)
         ,@(when (alist-get 'terminal node) '(:value '("++terminal")))
@@ -325,8 +356,7 @@ leaf becomes a command that runs straight away."
          ("-=" "Extra arguments" "++=" :prompt "Extra arguments: ")]
         [("RET" "Run" bb-transient-run-current)
          ("_" "Copy command" bb-transient-copy-current)
-         ("t" "In a terminal" "++terminal")])
-     t)))
+         ("t" "In a terminal" "++terminal")]))))
 
 ;;;; Filling in options
 
@@ -714,7 +744,11 @@ outermost layer first, so a parent's keys are the same in every project
 that uses it; ROOT's tasks take what is left.  A task in an inner layer
 hides an outer layer's of the same name.  A layer whose tasks can't be
 read is left out, unless it is ROOT.  REFRESH also recompiles the
-defaults and hooks, and requires hook namespaces again."
+defaults and hooks, and requires hook namespaces again.
+
+The menu is only defined again when the layers or what was read of
+them changed, or on REFRESH.  Its submenus are defined when first
+opened; see `bb-transient--define'."
   (when refresh
     (clrhash bb-transient--compiled)
     (clrhash bb-transient--required))
@@ -723,44 +757,50 @@ defaults and hooks, and requires hook namespaces again."
          (sym (intern (format "bb-transient:%s"
                               (substring (md5 (prin1-to-string layers)) 0 6))))
          (taken (list "q" "g" "_"))
-         seen found groups)
+         seen found groups read)
     ;; Innermost first, so its tasks hide an outer layer's; `found' ends
     ;; up outermost first, which is the order the keys are given in.
     (pcase-dolist (`(,label . ,dir) (reverse layers))
-      (when-let* ((tree (condition-case err
-                            (bb-transient-tasks dir refresh)
-                          (error (if (file-equal-p dir root)
-                                     (signal (car err) (cdr err))
-                                   (message "bb-transient: skipping %s: %s"
-                                            label (error-message-string err))
-                                   nil)))))
+      (when-let* ((result (condition-case err
+                              (bb-transient--read dir refresh)
+                            (error (if (file-equal-p dir root)
+                                       (signal (car err) (cdr err))
+                                     (message "bb-transient: skipping %s: %s"
+                                              label (error-message-string err))
+                                     nil))))
+                  (tree (alist-get 'tasks result)))
+        (push (cons dir result) read)
         (let ((tree (seq-remove (lambda (n) (member (alist-get 'name n) seen)) tree)))
           ;; Ask now, not while a menu is up.
           (when (and (bb-transient--has-forms tree) (bb-transient--cljbang-p))
             (bb-transient--trusted-p dir))
           (setq seen (append seen (mapcar (lambda (n) (alist-get 'name n)) tree)))
           (push (list label dir tree) found))))
-    ;; Pushing reverses `found', so the groups end up innermost first.
-    (pcase-dolist (`(,label ,dir ,tree) found)
-      (push (vconcat
-             (list (if (cdr layers) label "bb tasks"))
-             (mapcar (lambda (node)
-                       (let ((key (bb-transient--key (alist-get 'name node) taken)))
-                         (push key taken)
-                         (list key (bb-transient--describe node)
-                               (bb-transient--define
-                                dir (list (alist-get 'name node)) node))))
-                     tree))
-            groups))
-    (put sym 'bb-transient-root root)
-    (put sym 'bb-transient-layers layers)
-    (eval
-     `(transient-define-prefix ,sym ()
-        "bb tasks"
-        ,@groups
-        [("g" "Refresh" bb-transient-refresh :transient nil)
-         ("_" bb-transient-toggle-copy)])
-     t)
+    (let ((built (cons layers read)))
+      (unless (and (not refresh)
+                   (get sym 'transient--prefix)
+                   (equal built (get sym 'bb-transient-built)))
+        ;; Pushing reverses `found', so the groups end up innermost first.
+        (pcase-dolist (`(,label ,dir ,tree) found)
+          (push (vconcat
+                 (list (if (cdr layers) label "bb tasks"))
+                 (mapcar (lambda (node)
+                           (let ((key (bb-transient--key (alist-get 'name node) taken)))
+                             (push key taken)
+                             (list key (bb-transient--describe node)
+                                   (bb-transient--define
+                                    dir (list (alist-get 'name node)) node))))
+                         tree))
+                groups))
+        (put sym 'bb-transient-root root)
+        (put sym 'bb-transient-layers layers)
+        (bb-transient--eval
+         `(transient-define-prefix ,sym ()
+            "bb tasks"
+            ,@groups
+            [("g" "Refresh" bb-transient-refresh :transient nil)
+             ("_" bb-transient-toggle-copy)]))
+        (put sym 'bb-transient-built built)))
     sym))
 
 (defun bb-transient-refresh ()
