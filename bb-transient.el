@@ -37,6 +37,10 @@
 ;; `ghostel-compile' buffer instead.  `t' in an options menu, or a
 ;; prefix argument on a bare leaf, flips the choice for one run.
 ;;
+;; A command marked `:bb-transient/singleton true' runs once at a time:
+;; while it is still running, running it again selects its buffer
+;; instead of starting it over.
+;;
 ;; An option can be filled in from where point is.  bb.edn's
 ;; `:bb-transient/defaults' maps option names to cljbang forms:
 ;;
@@ -198,6 +202,7 @@ Cached until bb.edn changes, or REFRESH.  A node is an alist:
   options   for a leaf, its babashka.cli options, each an alist of
             name, desc, alias, require, default and boolean
   terminal  non-nil when it should run in a terminal
+  singleton non-nil when running it again while it runs switches to it
   defaults  for a leaf, an alist of option name to cljbang source
   before    the cljbang source of its before hook, or nil
   after     the same for its after hook
@@ -292,7 +297,8 @@ straight away."
                   (if bb-transient--copy
                       (bb-transient--copy root path nil)
                     (bb-transient--run root path nil (xor terminal flip)
-                                       (get sym 'bb-transient-hooks))))))
+                                       (get sym 'bb-transient-hooks)
+                                       (alist-get 'singleton node))))))
     sym))
 
 (defun bb-transient--stub (sym)
@@ -614,17 +620,52 @@ is passed as --config when that is not ROOT."
                            (unless (file-equal-p dir root)
                              (expand-file-name "bb.edn" root)))))
 
-(defun bb-transient--run (root path args &optional terminal hooks)
+(defun bb-transient--buffer-name (path)
+  "The name of the output buffer for bb PATH."
+  (format "*bb %s*" (string-join path " ")))
+
+(defun bb-transient--node (root path)
+  "The node for PATH in ROOT's tasks, or nil."
+  (let ((nodes (bb-transient-tasks root))
+        node)
+    (while (and path
+                (setq node (seq-find (lambda (n) (equal (alist-get 'name n) (car path)))
+                                     nodes)))
+      (setq nodes (alist-get 'children node)
+            path (cdr path)))
+    (and (not path) node)))
+
+(defun bb-transient--running (path)
+  "The output buffer for bb PATH if its process is still running, or nil."
+  (when-let* ((buf (get-buffer (bb-transient--buffer-name path)))
+              (proc (get-buffer-process buf)))
+    (and (process-live-p proc) buf)))
+
+(defun bb-transient--run (root path args &optional terminal hooks singleton)
   "Run bb PATH with ARGS, using ROOT's bb.edn, and return the output buffer.
 It runs from `bb-transient--directory', passing ROOT's bb.edn as
 --config when that is not ROOT.  The buffer is a compilation buffer,
 or with TERMINAL an interactive `ghostel-compile' buffer, so TUIs get
 a real terminal.
 
+With SINGLETON, when PATH is still running from an earlier call,
+select its buffer and return it instead: nothing is started, ARGS are
+ignored and no hook is called.
+
 HOOKS, from `bb-transient--hooks', are called here: before with the
 args and directory, which may return new args, and after once the
 process exits.  A before hook that signals cancels the run, and
 returns nil."
+  (if-let* ((buf (and singleton (bb-transient--running path))))
+      (progn
+        (pop-to-buffer buf)
+        (message "bb %s is already running" (string-join path " "))
+        buf)
+    (bb-transient--start root path args terminal hooks)))
+
+(defun bb-transient--start (root path args terminal hooks)
+  "Start bb PATH with ARGS for `bb-transient--run', which see.
+ROOT, TERMINAL and HOOKS are as there."
   (let* ((hooks (bb-transient--usable-hooks hooks path))
          (origin (current-buffer))
          (default-directory (bb-transient--directory root))
@@ -641,7 +682,7 @@ returns nil."
       (let* ((config (unless (file-equal-p default-directory root)
                        (expand-file-name "bb.edn" root)))
              (command (bb-transient--command path args config))
-             (name (format "*bb %s*" (string-join path " ")))
+             (name (bb-transient--buffer-name path))
              (buf (if terminal
                       (progn
                         (unless (require 'ghostel-compile nil t)
@@ -669,9 +710,16 @@ block or a message to an agent."
   "Run bb task PATH (a list of names) with ARGS and return its buffer.
 PROJECT is the directory whose bb.edn defines the task; nil means the
 current project.  It runs from `bb-transient-directory-function', in
-a compilation buffer, or with TERMINAL a `ghostel-compile' one."
-  (let ((bb-transient--menu-directory nil))
-    (bb-transient--run (or project (bb-transient-project)) path args terminal)))
+a compilation buffer, or with TERMINAL a `ghostel-compile' one.  A
+task marked `:bb-transient/singleton' that is still running is
+switched to instead."
+  (let ((bb-transient--menu-directory nil)
+        (root (or project (bb-transient-project))))
+    (bb-transient--run root path args terminal nil
+                       ;; Only a task that may be running needs looking up.
+                       (and (bb-transient--running path)
+                            (alist-get 'singleton
+                                       (ignore-errors (bb-transient--node root path)))))))
 
 (defun bb-transient--current-args ()
   "The current options menu's bb arguments, or signal if one is missing."
@@ -694,7 +742,8 @@ When the top menu asked for copying, copy it instead."
                          (get sym 'bb-transient-path)
                          (bb-transient--current-args)
                          (member "++terminal" (transient-args sym))
-                         (get sym 'bb-transient-hooks)))))
+                         (get sym 'bb-transient-hooks)
+                         (alist-get 'singleton (get sym 'bb-transient-node))))))
 
 (transient-define-suffix bb-transient-copy-current ()
   "Copy the command line `bb-transient-run-current' would run.

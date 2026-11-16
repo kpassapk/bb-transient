@@ -120,6 +120,22 @@ needed if you use this.
 
 [ghostel]: https://github.com/dakra/ghostel
 
+## Singletons
+
+A dev server or a watcher should run once.  Mark it with
+`:bb-transient/singleton true`, on the fn or in the task map:
+
+```clojure
+serve {:bb-transient/singleton true :exec-fn tasks/serve}
+```
+
+While it is still running, running it again selects its buffer instead
+of asking to kill it and starting over.  Nothing is started, so the
+options are ignored and no hook is called.  Once it has exited it
+starts as usual.  A command is its task path: `serve --port=1` and
+`serve --port=2` are the same singleton.  `bb-transient-run` does the
+same.
+
 ## Layers
 
 A menu can hold other projects' tasks too, a group per project: the

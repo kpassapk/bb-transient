@@ -39,7 +39,7 @@ As pressing their keys would; `bb-transient--setup' must have run."
 (ert-deftest bb-transient-test-tree-order-and-privacy ()
   (let ((tree (bb-transient-tasks bb-transient-test--fixture t)))
     (should (equal (mapcar (lambda (n) (alist-get 'name n)) tree)
-                   '("zeta" "greet" "echo" "broken" "table" "tui" "hooks" "noted")))))
+                   '("zeta" "greet" "echo" "broken" "table" "tui" "serve" "hooks" "noted")))))
 
 (ert-deftest bb-transient-test-tree-specs ()
   (let* ((tree (bb-transient-tasks bb-transient-test--fixture t))
@@ -398,6 +398,51 @@ As pressing their keys would; `bb-transient--setup' must have run."
               (should (file-equal-p default-directory bb-transient-test--fixture)))
             (kill-buffer buf)))
       (delete-directory other t))))
+
+;;;; Singletons
+
+(ert-deftest bb-transient-test-tree-singleton ()
+  (bb-transient-tasks bb-transient-test--fixture t)
+  (should (eq (alist-get 'singleton (bb-transient-test--leaf '("serve"))) t))
+  (should-not (alist-get 'singleton (bb-transient-test--leaf '("echo")))))
+
+(defun bb-transient-test--wait-for (buf regexp)
+  "Wait until BUF's process has written something matching REGEXP."
+  (with-current-buffer buf
+    (while (and (get-buffer-process buf)
+                (not (save-excursion (goto-char (point-min))
+                                     (re-search-forward regexp nil t))))
+      (accept-process-output nil 0.1))
+    (buffer-string)))
+
+(ert-deftest bb-transient-test-singleton ()
+  (let* ((root bb-transient-test--fixture)
+         (bb-transient-use-comint nil)
+         (default-directory root)
+         (buf (bb-transient-run '("serve") '("--port=1") root))
+         (proc (get-buffer-process buf)))
+    (unwind-protect
+        (progn
+          (should (string-match-p ":port 1" (bb-transient-test--wait-for buf ":port")))
+          (should (process-live-p proc))
+          ;; Running it again switches to it, from Lisp and from a menu.
+          (with-temp-buffer
+            (should (eq (bb-transient-run '("serve") '("--port=2") root) buf))
+            (should (eq (current-buffer) buf)))
+          (with-temp-buffer
+            (should (eq (bb-transient--run root '("serve") '("--port=3") nil nil t) buf))
+            (should (eq (current-buffer) buf)))
+          (should (eq (get-buffer-process buf) proc))
+          (should-not (string-match-p ":port [23]"
+                                      (with-current-buffer buf (buffer-string))))
+          ;; Once it has exited it starts again.
+          (delete-process proc)
+          (bb-transient-test--wait buf)
+          (should (eq (bb-transient-run '("serve") '("--port=4") root) buf))
+          (should (string-match-p ":port 4" (bb-transient-test--wait-for buf ":port")))
+          (should-not (eq (get-buffer-process buf) proc)))
+      (when-let* ((p (get-buffer-process buf))) (delete-process p))
+      (kill-buffer buf))))
 
 ;;;; Hooks
 

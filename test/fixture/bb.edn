@@ -25,6 +25,10 @@
                     :exec-fn cmds/echo}
              "plain" {:exec-fn cmds/deep}}}
 
+  serve {:doc "Runs until killed, once at a time"
+         :bb-transient/singleton true
+         :exec-fn cmds/serve}
+
   hooks {:doc "Commands with before and after hooks"
          :cmd {"rewrite" {:exec-fn cmds/echo
                           :bb-transient/before (fn [{:keys [args]}] (conj args "--b=added"))}

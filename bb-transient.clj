@@ -10,7 +10,8 @@
 ;;
 ;; A node has either "children" (a :cmd table) or "options" (a leaf).
 ;; A leaf marked `:bb-transient/terminal true', in its task map or on
-;; its :exec-fn's metadata, also carries "terminal": true.
+;; its :exec-fn's metadata, also carries "terminal": true.  The same
+;; goes for `:bb-transient/singleton true' and "singleton": true.
 ;;
 ;; `:bb-transient/defaults' maps option names to cljbang forms that
 ;; Emacs evaluates to fill those options in.  The top-level one in
@@ -85,6 +86,9 @@
 (defn- terminal? [& maps]
   (boolean (some :bb-transient/terminal maps)))
 
+(defn- singleton? [& maps]
+  (boolean (some :bb-transient/singleton maps)))
+
 (defn- hooks
   "The hooks in MAPS (earlier ones win), as strings."
   [& maps]
@@ -115,6 +119,7 @@
                     :options (mapv option spec)}
                    (hooks task m))
       (terminal? task m) (assoc :terminal true)
+      (singleton? task m) (assoc :singleton true)
       d (assoc :defaults d)
       err (assoc :error err))))
 
@@ -138,7 +143,8 @@
             (:exec-fn v) (leaf defaults nm (:doc v) v)
             :else        (cond-> (merge {:name nm :doc (:doc v) :options []}
                                            (hooks v))
-                           (terminal? v) (assoc :terminal true)))))))
+                           (terminal? v) (assoc :terminal true)
+                           (singleton? v) (assoc :singleton true)))))))
 
 (defn- public-task? [[k v]]
   (and (symbol? k)

@@ -40,3 +40,10 @@
   [{:keys [msg]}]
   (println msg)
   (System/exit 2))
+
+(defn serve
+  "Prints its options, then waits to be killed"
+  {:org.babashka/cli {:spec {:port {:desc "Where to listen"}}}}
+  [opts]
+  (prn opts)
+  (Thread/sleep 60000))
