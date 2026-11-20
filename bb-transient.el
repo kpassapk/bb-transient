@@ -538,14 +538,16 @@ is gone."
 
 (defun bb-transient--args (args)
   "Turn transient ARGS into a bb argument list.
-The `++=' extra-arguments value is split like a shell command line,
-and the `++terminal' switch is dropped."
-  (mapcan (lambda (a)
-            (cond ((equal a "++terminal") nil)
-                  ((string-prefix-p "++=" a)
-                   (split-string-shell-command (substring a 3)))
-                  (t (list a))))
-          args))
+The `++=' extra-arguments value is split like a shell command line
+and goes last, so options stay before any `--' it holds; the
+`++terminal' switch is dropped."
+  (let (options extra)
+    (dolist (a args)
+      (cond ((equal a "++terminal"))
+            ((string-prefix-p "++=" a)
+             (setq extra (append extra (split-string-shell-command (substring a 3)))))
+            (t (push a options))))
+    (append (nreverse options) extra)))
 
 (defun bb-transient--missing (options args)
   "Names of the required OPTIONS that ARGS does not set."

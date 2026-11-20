@@ -190,7 +190,9 @@ As pressing their keys would; `bb-transient--setup' must have run."
 (ert-deftest bb-transient-test-args ()
   (should (equal (bb-transient--args '("--title=A b" "++=--x 1 \"two words\""))
                  '("--title=A b" "--x" "1" "two words")))
-  (should (equal (bb-transient--args '("++terminal" "--a=1")) '("--a=1"))))
+  (should (equal (bb-transient--args '("++terminal" "--a=1")) '("--a=1")))
+  (should (equal (bb-transient--args '("++=-- hi" "--id=7"))
+                 '("--id=7" "--" "hi"))))
 
 (ert-deftest bb-transient-test-missing ()
   (let ((opts '(((name . "title") (require . t))
