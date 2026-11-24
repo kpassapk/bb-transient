@@ -136,6 +136,31 @@ starts as usual.  A command is its task path: `serve --port=1` and
 `serve --port=2` are the same singleton.  `bb-transient-run` does the
 same.
 
+## Silent commands
+
+Some commands only matter when they fail.  Mark them with
+`:bb-transient/silent true`, on the fn or in the task map:
+
+```clojure
+snapshot {:bb-transient/silent true :exec-fn work/snapshot}
+```
+
+They run in their usual buffer, but it isn't shown:
+
+- Exit 0: a message, `bb snapshot: done`.
+- Any other exit: the buffer pops up, and `next-error` goes to it.
+- Input: when the command has written a line with no newline and
+  nothing more for 0.3 s while it still runs, it is probably a prompt,
+  and the buffer pops up.  This is a guess: a prompt that ends in a
+  newline, or one that isn't flushed (`print` without `flush` in bb),
+  goes unseen, and the command waits in the hidden buffer.  A progress
+  line ending in `\r` pops it up for nothing.
+
+`s` in an options menu flips it for one run; a bare leaf can't be
+flipped.  A command run in a terminal is never silent.  After hooks
+run as usual, after the message, and `bb-transient-run` takes a
+`silent` argument.
+
 ## Layers
 
 A menu can hold other projects' tasks too, a group per project: the

@@ -39,7 +39,7 @@ As pressing their keys would; `bb-transient--setup' must have run."
 (ert-deftest bb-transient-test-tree-order-and-privacy ()
   (let ((tree (bb-transient-tasks bb-transient-test--fixture t)))
     (should (equal (mapcar (lambda (n) (alist-get 'name n)) tree)
-                   '("zeta" "greet" "echo" "broken" "table" "tui" "serve" "hooks" "noted")))))
+                   '("zeta" "greet" "echo" "broken" "table" "tui" "serve" "hooks" "noted" "silent")))))
 
 (ert-deftest bb-transient-test-tree-specs ()
   (let* ((tree (bb-transient-tasks bb-transient-test--fixture t))
@@ -191,6 +191,7 @@ As pressing their keys would; `bb-transient--setup' must have run."
   (should (equal (bb-transient--args '("--title=A b" "++=--x 1 \"two words\""))
                  '("--title=A b" "--x" "1" "two words")))
   (should (equal (bb-transient--args '("++terminal" "--a=1")) '("--a=1")))
+  (should (equal (bb-transient--args '("++silent" "--a=1")) '("--a=1")))
   (should (equal (bb-transient--args '("++=-- hi" "--id=7"))
                  '("--id=7" "--" "hi"))))
 
@@ -444,6 +445,81 @@ As pressing their keys would; `bb-transient--setup' must have run."
           (should (string-match-p ":port 4" (bb-transient-test--wait-for buf ":port")))
           (should-not (eq (get-buffer-process buf) proc)))
       (when-let* ((p (get-buffer-process buf))) (delete-process p))
+      (kill-buffer buf))))
+
+;;;; Silent commands
+
+(ert-deftest bb-transient-test-tree-silent ()
+  (bb-transient-tasks bb-transient-test--fixture t)
+  ;; In the task map, and on the :exec-fn's metadata.
+  (should (eq (alist-get 'silent (bb-transient-test--leaf '("silent" "ok"))) t))
+  (should (eq (alist-get 'silent (bb-transient-test--leaf '("silent" "ask"))) t))
+  (should-not (alist-get 'silent (bb-transient-test--leaf '("echo")))))
+
+(ert-deftest bb-transient-test-setup-silent-default ()
+  (let* ((root bb-transient-test--fixture)
+         (_ (bb-transient--setup root t))
+         (ok (bb-transient-test--open root '("silent" "ok"))))
+    (should (equal (oref (get ok 'transient--prefix) default-value) '("++silent")))))
+
+(defmacro bb-transient-test--messages (&rest body)
+  "Run BODY; return the messages it showed, oldest first."
+  (declare (indent 0))
+  `(let ((shown nil))
+     (cl-letf (((symbol-function 'message)
+                (lambda (fmt &rest args)
+                  (when fmt (push (apply #'format-message fmt args) shown)))))
+       ,@body)
+     (nreverse shown)))
+
+(defun bb-transient-test--run-silent (path args)
+  "Run fixture command PATH with ARGS silently; return its buffer, done."
+  (let* ((bb-transient-use-comint nil)
+         (default-directory bb-transient-test--fixture)
+         (buf (bb-transient-run path args bb-transient-test--fixture nil t)))
+    (bb-transient-test--wait buf)
+    buf))
+
+(ert-deftest bb-transient-test-silent-success ()
+  (with-temp-buffer
+    (let* ((next-error-last-buffer (current-buffer))
+           buf
+           (shown (bb-transient-test--messages
+                    (setq buf (bb-transient-test--run-silent '("silent" "ok") '("--a=1"))))))
+      (unwind-protect
+          (progn
+            (should (string-match-p "{:a 1}" (with-current-buffer buf (buffer-string))))
+            (should-not (get-buffer-window buf t))
+            (should (member "bb silent ok: done" shown))
+            ;; `next-error' still goes where it went.
+            (should (eq next-error-last-buffer (current-buffer))))
+        (kill-buffer buf)))))
+
+(ert-deftest bb-transient-test-silent-failure ()
+  (let* ((next-error-last-buffer nil)
+         (buf (bb-transient-test--run-silent '("silent" "fail") '("--msg=no"))))
+    (unwind-protect
+        (progn
+          (should (get-buffer-window buf t))
+          (should (eq next-error-last-buffer buf)))
+      (kill-buffer buf))))
+
+(ert-deftest bb-transient-test-silent-prompt ()
+  (let* ((bb-transient-use-comint nil)
+         (default-directory bb-transient-test--fixture)
+         (buf (bb-transient-run '("silent" "ask") nil bb-transient-test--fixture nil t))
+         (proc (get-buffer-process buf)))
+    (unwind-protect
+        (progn
+          (bb-transient-test--wait-for buf "Name\\? ")
+          (should-not (get-buffer-window buf t))
+          ;; Nothing more comes, so it is taken for a prompt.
+          (with-timeout (5 (ert-fail "the prompt never showed the buffer"))
+            (while (not (get-buffer-window buf t))
+              (accept-process-output nil 0.1)))
+          (process-send-string proc "ert\n")
+          (should (string-match-p "hi ert" (bb-transient-test--wait buf))))
+      (when (process-live-p proc) (delete-process proc))
       (kill-buffer buf))))
 
 ;;;; Hooks

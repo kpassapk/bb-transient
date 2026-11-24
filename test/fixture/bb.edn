@@ -40,5 +40,10 @@
          :task (println "noted")
          :bb-transient/after fixture.hooks/record}
 
+  silent {:doc "Commands whose buffer shows only when it must"
+          :cmd {"ok" {:exec-fn cmds/echo :bb-transient/silent true}
+                "fail" {:exec-fn cmds/fail :bb-transient/silent true}
+                "ask" {:exec-fn cmds/ask}}}
+
   -hidden {:task (println "private by name")}
   secret {:private true :task (println "private by flag")}}}
