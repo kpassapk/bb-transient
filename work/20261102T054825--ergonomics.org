@@ -21,7 +21,13 @@ project, but rather for the current project.
 :ID:       629E1E62-4F12-4F0F-A77F-51C01C09E4DB
 :END:
 
-** Silence output
+** Silence output                                             :bb_transient:
+:PROPERTIES:
+:BRANCH:   silence-output
+:BASE:     main
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:ID:       7F7B2B6B-85BA-4CFD-9E47-410A4A33ED44
+:END:
 
 In a lot of my =bb-transient= commands, I don't care about the command output, only when something fails.
 In those cases, I want no output at all, unless there has been an error, or I am asked for input.
@@ -56,7 +62,6 @@ or on the =:exec-fn='s metadata.
 :REPO:     ~/src/github.com/kpassapk/bb-transient
 :BRANCH:   copy-cmd
 :BASE:     ergonomics-improvements
-:ID:       F006E73A-32FD-4EBA-BA23-34218A6E5BD0
 :END:
 
 In some cases, I want to drive my workflow with agents, and in the
