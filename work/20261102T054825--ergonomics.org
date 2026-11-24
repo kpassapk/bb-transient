@@ -57,6 +57,622 @@ or on the =:exec-fn='s metadata.
 - Terminal commands ignore it: a TUI wants its window.
 - After hooks still get =:out=.
 
+*** Result
+Branch =silence-output=, on =main=:
+- c92cd2f Silent commands: show the buffer only on failure or a prompt
+- 3ffe096 demo: a silent tetris (=bb demo tetris=, marked silent in bb.edn)
+- a8e16b4 demo: tetris opens M-x tetris, from an after hook
+
+
+=:bb-transient/silent true= is set in the task map or on the fn's
+metadata. =s= in an options menu flips it for one run, and bare leaves
+can't be flipped. A silent command runs =compile= with
+=display-buffer-no-window= and keeps the old =next-error-last-buffer=.
+On exit 0 it shows a message. On any other exit the buffer pops up and
+becomes =next-error='s buffer. When a partial line stands for 0.3 s
+while the command still runs, the buffer pops up too. That happens
+before the after hook runs, so the hook's own output wins. Terminal
+runs ignore the flag. You didn't answer the =bb-transient-run= question,
+so I went with my preference: it takes a =silent= argument. The README
+has a "Silent commands" section that says the prompt check is a guess.
+
+New tests: the tree flag, the menu's default value, =++silent= dropped
+from the args, and a success, a failure and a prompt run against a new
+fixture task =silent= (=ok=, =fail=, =ask=).
+
+Run here: the introspection against the fixture with =bb=, which gives
+the right =silent= flags, and a paren-balance check.
+*Not run: =bb ci=.* There is no Emacs in the sandbox, so neither the
+byte-compile nor the ERT suite has run. Please run =bb ci= after
+landing. Two things are untested: that =compilation-start= passes
+=allow-no-window= on your Emacs (if it doesn't, the buffer just shows
+as before), and that windows behave in batch the way the
+failure and prompt tests expect.
+
+
+*** Land
+
+#+begin_src sh
+  aa bundle land --id=7F7B2B6B --apply
+#+end_src
+
+#+RESULTS:
+: == silence-output (ff)
+: 3ffe096 demo: a silent tetris
+: 
+:  bb.edn       | 3 ++-
+:  user/demo.bb | 8 ++++++++
+:  2 files changed, 10 insertions(+), 1 deletion(-)
+: 
+: moved silence-output: c92cd2f -> 3ffe096
+
+#+TARGET: checkout ~/src/github.com/kpassapk/bb-transient-silence-output
+
+*** Checkout                                                       :checkout:
+:PROPERTIES:
+:REPO:     ~/src/github.com/kpassapk/bb-transient-silence-output
+:END:
+
+#+begin_src sh
+  aa bundle checkout --id=7F7B2B6B
+#+end_src
+
+#+RESULTS:
+: /Users/kyle/src/github.com/kpassapk/bb-transient-silence-output
+
+Evaluate =bb-transient.el= to pick up the changes
+
+#+begin_src elisp
+  (with-current-buffer (find-file-noselect "bb-transient.el")
+    (eval-buffer))
+#+end_src
+
+#+RESULTS:
+
+*** Open PR :checkout:
+
+Push =silence-output= and open the PR against =main=. Run *Land* first
+so the branch includes =a8e16b4= (the tetris hook). This pushes and
+creates a PR on GitHub.
+
+#+name: open-pr
+#+begin_src sh
+  git push -u origin silence-output
+  gh pr create --base main --head silence-output \
+    --title "Silent commands: show the buffer only on failure or a prompt" \
+    --body-file - <<'BODY'
+  `:bb-transient/silent true`, in the task map or on the `:exec-fn`'s
+  metadata, runs a command without showing its compilation buffer:
+
+  - Exit 0: a message, `bb <cmd>: done`.
+  - Any other exit: the buffer pops up, and `next-error` goes to it.
+  - A partial line that stands for 0.3 s while the command runs is taken
+    for a prompt, and the buffer pops up. This is a guess, documented in
+    the README.
+
+  `s` in an options menu flips it for one run; bare leaves can't be
+  flipped. Terminal commands ignore it. After hooks run after the
+  message. `bb-transient-run` takes a `silent` argument.
+
+  `bb demo tetris` is a silent demo whose after hook opens `M-x tetris`.
+
+  Tests: the tree flag, the menu default, `++silent` dropped from args,
+  and success / failure / prompt runs against a new fixture task.
+
+  🤖 Generated with [Claude Code](https://claude.com/claude-code)
+  BODY
+#+end_src
+
+#+RESULTS: open-pr
+: echo 'ob_comint_async_shell_end_dbcc3847-90a7-4a93-ae01-c691ba3b6ba3'
+: branch 'silence-output' set up to track 'origin/silence-output'.
+: Everything up-to-date
+: https://github.com/kpassapk/bb-transient/pull/1
+
+[[https://github.com/kpassapk/bb-transient/pull/1]]
+
+*** Record demo
+
+Record the screen with OBS from the command line, then upload the file
+to YouTube. OBS has no command to stop a recording, so these blocks
+control the running OBS through its built-in websocket (OBS 28 and
+later), using [[https://github.com/grigio/obs-cmd][obs-cmd]]. The upload uses
+[[https://github.com/porjo/youtubeuploader][youtubeuploader]], which needs a
+=client_secrets.json= from a Google Cloud project with the YouTube Data
+API enabled. Its first run opens a browser for you to log in, and it
+keeps the token in =request.token=.
+
+Check what's installed. Read-only.
+
+#+name: rec-check
+#+begin_src sh
+  ls -d /Applications/OBS.app
+  command -v obs-cmd youtubeuploader
+#+end_src
+
+
+If a tool is missing: =brew install --cask obs=, =cargo install obs-cmd=
+(or a release binary), and =go install github.com/porjo/youtubeuploader@latest=
+(or a release binary). In OBS, turn on Tools → WebSocket Server
+Settings. If you keep its authentication on, export
+=OBS_WEBSOCKET_URL=obsws://localhost:4455/PASSWORD= in your shell
+before running these blocks. Don't put the password in the workbook.
+
+Does Homebrew have the two tools? Read-only: it only searches.
+
+#+name: rec-brew
+#+begin_src sh
+  brew search obs-cmd youtubeuploader
+  command -v cargo go
+#+end_src
+
+#+RESULTS: rec-brew
+: Warning: Loading formulae from paths or URLs is not supported; use a formula name.
+: Error: No formulae or casks found for "obs-cmd youtubeuploader".
+: /Users/kyle/.cargo/bin/cargo
+: /opt/homebrew/bin/go
+
+Install both tools. This builds them and puts them in =~/.cargo/bin=
+and =$(go env GOPATH)/bin=. I'm not sure which path youtubeuploader's
+main package is at, so the block tries the newer layout (=cmd/=) first.
+
+#+name: rec-install
+#+begin_src sh
+  cargo install obs-cmd
+  go install github.com/porjo/youtubeuploader/cmd/youtubeuploader@latest \
+    || go install github.com/porjo/youtubeuploader@latest
+  ls "$(go env GOPATH)/bin" | grep youtubeuploader
+#+end_src
+
+#+RESULTS: rec-install
+#+begin_example
+Updating crates.io index
+error: could not find `obs-cmd` in registry `crates-io` with version `*`
+go: downloading github.com/porjo/youtubeuploader v1.25.5
+go: downloading github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
+go: downloading google.golang.org/api v0.238.0
+go: downloading golang.org/x/oauth2 v0.30.0
+go: downloading google.golang.org/grpc v1.73.0
+go: downloading cloud.google.com/go/compute/metadata v0.7.0
+go: downloading github.com/googleapis/gax-go/v2 v2.14.2
+go: downloading github.com/googleapis/enterprise-certificate-proxy v0.3.6
+go: downloading cloud.google.com/go/auth v0.16.2
+go: downloading golang.org/x/net v0.41.0
+go: downloading go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0
+go: downloading cloud.google.com/go/auth/oauth2adapt v0.2.8
+go: downloading github.com/google/s2a-go v0.1.9
+go: downloading github.com/felixge/httpsnoop v1.0.4
+go: downloading go.opentelemetry.io/otel v1.37.0
+go: downloading go.opentelemetry.io/otel/metric v1.37.0
+go: downloading go.opentelemetry.io/otel/trace v1.37.0
+go: downloading google.golang.org/protobuf v1.36.6
+go: downloading google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822
+go: downloading github.com/go-logr/logr v1.4.3
+go: downloading golang.org/x/text v0.26.0
+go: downloading github.com/go-logr/stdr v1.2.2
+go: downloading go.opentelemetry.io/auto/sdk v1.1.0
+go: downloading golang.org/x/crypto v0.39.0
+go: downloading golang.org/x/sys v0.33.0
+youtubeuploader
+#+end_example
+
+=obs-cmd= isn't on crates.io; build it from its repo instead.
+
+#+name: rec-install-obs-cmd
+#+begin_src sh
+  cargo install --git https://github.com/grigio/obs-cmd
+  command -v obs-cmd
+#+end_src
+
+#+RESULTS: rec-install-obs-cmd
+#+begin_example
+Updating git repository `https://github.com/grigio/obs-cmd`
+  Installing obs-cmd v1.0.4 (https://github.com/grigio/obs-cmd#71f55328)
+    Updating crates.io index
+     Locking 167 packages to latest compatible versions
+      Adding generic-array v0.14.7 (available: v0.14.9)
+ Downloading crates ...
+  Downloaded cfg-if v1.0.5
+  Downloaded block-buffer v0.10.4
+  Downloaded anstyle-query v1.1.5
+  Downloaded clap_lex v1.1.2
+  Downloaded anstream v1.0.0
+  Downloaded cpufeatures v0.2.17
+  Downloaded darling_macro v0.24.1
+  Downloaded form_urlencoded v1.2.3
+  Downloaded futures-macro v0.3.34
+  Downloaded dyn-clone v1.0.20
+  Downloaded equivalent v1.0.3
+  Downloaded futures-sink v0.3.34
+  Downloaded generic-array v0.14.7
+  Downloaded strsim v0.11.1
+  Downloaded ref-cast v1.0.27
+  Downloaded heck v0.5.0
+  Downloaded futures-core v0.3.34
+  Downloaded time-macros v0.2.32
+  Downloaded colorchoice v1.0.5
+  Downloaded autocfg v1.5.1
+  Downloaded anstyle v1.0.14
+  Downloaded anstyle-parse v1.0.0
+  Downloaded async-trait v0.1.92
+  Downloaded tokio-macros v2.7.2
+  Downloaded itoa v1.0.19
+  Downloaded percent-encoding v2.3.2
+  Downloaded idna_adapter v1.2.2
+  Downloaded unicode-xid v0.2.6
+  Downloaded num-conv v0.2.2
+  Downloaded ref-cast-impl v1.0.27
+  Downloaded stable_deref_trait v1.2.1
+  Downloaded ident_case v1.0.1
+  Downloaded powerfmt v0.2.1
+  Downloaded sha1_smol v1.0.1
+  Downloaded rustc_version v0.4.1
+  Downloaded futures-task v0.3.34
+  Downloaded digest v0.10.7
+  Downloaded displaydoc v0.2.7
+  Downloaded crypto-common v0.1.7
+  Downloaded time-core v0.1.9
+  Downloaded utf8_iter v1.1.0
+  Downloaded pin-project-lite v0.2.18
+  Downloaded utf8parse v0.2.2
+  Downloaded deranged v0.5.9
+  Downloaded bs58 v0.5.1
+  Downloaded quote v1.0.47
+  Downloaded version_check v0.9.5
+  Downloaded clap v4.6.9
+  Downloaded potential_utf v0.1.6
+  Downloaded is_terminal_polyfill v1.70.2
+  Downloaded slab v0.4.12
+  Downloaded sha2 v0.10.9
+  Downloaded fastrand v2.5.0
+  Downloaded hex v0.4.3
+  Downloaded rgb v0.8.53
+  Downloaded litemap v0.8.3
+  Downloaded core-foundation-sys v0.8.7
+  Downloaded httparse v1.10.1
+  Downloaded semver v1.0.28
+  Downloaded bitflags v2.13.2
+  Downloaded clap_derive v4.6.9
+  Downloaded simdutf8 v0.1.5
+  Downloaded utf_types v1.0.0
+  Downloaded iana-time-zone v0.1.65
+  Downloaded once_cell v1.21.4
+  Downloaded tinystr v0.8.5
+  Downloaded serde_with_macros v3.25.0
+  Downloaded tracing-core v0.1.36
+  Downloaded smallvec v1.16.6
+  Downloaded indexmap v1.9.3
+  Downloaded num-traits v0.2.19
+  Downloaded darling v0.24.1
+  Downloaded writeable v0.6.4
+  Downloaded log v0.4.35
+  Downloaded base64 v0.23.1
+  Downloaded icu_provider v2.4.0
+  Downloaded bytes v1.12.2
+  Downloaded socket2 v0.6.5
+  Downloaded serde_derive v1.0.229
+  Downloaded clap_complete v4.6.12
+  Downloaded proc-macro2 v1.0.107
+  Downloaded icu_normalizer_data v2.4.0
+  Downloaded schemars v0.9.0
+  Downloaded yoke v0.8.4
+  Downloaded darling_core v0.24.1
+  Downloaded derive_more v2.1.1
+  Downloaded tracing-attributes v0.1.31
+  Downloaded obws v0.15.0
+  Downloaded tinyvec v1.13.3
+  Downloaded serde_core v1.0.229
+  Downloaded serde v1.0.229
+  Downloaded unicode-ident v1.0.27
+  Downloaded icu_locale_core v2.4.0
+  Downloaded memchr v2.8.3
+  Downloaded derive_more-impl v2.1.1
+  Downloaded mio v1.2.5
+  Downloaded schemars v1.2.3
+  Downloaded icu_collections v2.4.0
+  Downloaded hashbrown v0.12.3
+  Downloaded uuid v1.29.3
+  Downloaded http v1.5.0
+  Downloaded indexmap v2.14.2
+  Downloaded jiff-core v0.1.8
+  Downloaded icu_properties v2.4.0
+  Downloaded clap_builder v4.6.7
+  Downloaded url v2.5.9
+  Downloaded idna v1.1.0
+  Downloaded jiff-core v1.0.2
+  Downloaded serde_json v1.0.154
+  Downloaded futures-util v0.3.34
+  Downloaded hashbrown v0.17.2
+  Downloaded icu_properties_data v2.4.0
+  Downloaded zerofrom v0.1.8
+  Downloaded chrono v0.4.45
+  Downloaded serde_with v3.25.0
+  Downloaded zerofrom-derive v0.1.8
+  Downloaded typenum v1.20.1
+  Downloaded syn v2.0.119
+  Downloaded yoke-derive v0.8.4
+  Downloaded zerovec-derive v0.11.7
+  Downloaded thiserror-impl v2.0.21
+  Downloaded synstructure v0.14.0
+  Downloaded thiserror v2.0.21
+  Downloaded zmij v1.0.23
+  Downloaded icu_normalizer v2.4.0
+  Downloaded tokio-util v0.7.20
+  Downloaded jiff v0.2.46
+  Downloaded zerotrie v0.2.5
+  Downloaded jiff v1.0.3
+  Downloaded libc v0.2.191
+  Downloaded zerovec v0.11.9
+  Downloaded time v0.3.55
+  Downloaded tokio-websockets v0.13.3
+  Downloaded syn v3.0.10
+  Downloaded tracing v0.1.44
+  Downloaded tokio v1.54.1
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling stable_deref_trait v1.2.1
+   Compiling libc v0.2.191
+   Compiling serde_core v1.0.229
+   Compiling version_check v0.9.5
+   Compiling utf_types v1.0.0
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling icu_normalizer_data v2.4.0
+   Compiling typenum v1.20.1
+   Compiling strsim v0.11.1
+   Compiling icu_properties_data v2.4.0
+   Compiling pin-project-lite v0.2.18
+   Compiling ident_case v1.0.1
+   Compiling bytes v1.12.2
+   Compiling utf8parse v0.2.2
+   Compiling utf8_iter v1.1.0
+   Compiling httparse v1.10.1
+   Compiling anstyle-parse v1.0.0
+   Compiling itoa v1.0.19
+   Compiling generic-array v0.14.7
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-query v1.1.5
+   Compiling smallvec v1.16.6
+   Compiling futures-sink v0.3.34
+   Compiling futures-core v0.3.34
+   Compiling anstyle v1.0.14
+   Compiling zmij v1.0.23
+   Compiling colorchoice v1.0.5
+   Compiling anstream v1.0.0
+   Compiling serde v1.0.229
+   Compiling heck v0.5.0
+   Compiling unicode-xid v0.2.6
+   Compiling serde_json v1.0.154
+   Compiling once_cell v1.21.4
+   Compiling clap_lex v1.1.2
+   Compiling thiserror v2.0.21
+   Compiling tracing-core v0.1.36
+   Compiling clap_builder v4.6.7
+   Compiling http v1.5.0
+   Compiling futures-task v0.3.34
+   Compiling slab v0.4.12
+   Compiling base64 v0.22.1
+   Compiling fastrand v2.5.0
+   Compiling sha1_smol v1.0.1
+   Compiling percent-encoding v2.3.2
+   Compiling syn v3.0.10
+   Compiling syn v2.0.119
+   Compiling time-core v0.1.9
+   Compiling simdutf8 v0.1.5
+   Compiling num-conv v0.2.2
+   Compiling memchr v2.8.3
+   Compiling powerfmt v0.2.1
+   Compiling cfg-if v1.0.5
+   Compiling deranged v0.5.9
+   Compiling form_urlencoded v1.2.3
+   Compiling rgb v0.8.53
+   Compiling time v0.3.55
+   Compiling socket2 v0.6.5
+   Compiling mio v1.2.5
+   Compiling cpufeatures v0.2.17
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling uuid v1.29.3
+   Compiling bitflags v2.13.2
+   Compiling semver v1.0.28
+   Compiling tracing-attributes v0.1.31
+   Compiling derive_more-impl v2.1.1
+   Compiling synstructure v0.14.0
+   Compiling darling_core v0.24.1
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.7
+   Compiling displaydoc v0.2.7
+   Compiling tokio-macros v2.7.2
+   Compiling thiserror-impl v2.0.21
+   Compiling futures-macro v0.3.34
+   Compiling clap_derive v4.6.9
+   Compiling serde_derive v1.0.229
+   Compiling async-trait v0.1.92
+   Compiling tokio v1.54.1
+   Compiling tracing v0.1.44
+   Compiling futures-util v0.3.34
+   Compiling zerofrom v0.1.8
+   Compiling derive_more v2.1.1
+   Compiling clap v4.6.9
+   Compiling darling_macro v0.24.1
+   Compiling darling v0.24.1
+   Compiling yoke v0.8.4
+   Compiling clap_complete v4.6.12
+   Compiling serde_with_macros v3.25.0
+   Compiling serde_with v3.25.0
+   Compiling zerovec v0.11.9
+   Compiling zerotrie v0.2.5
+   Compiling tokio-util v0.7.20
+   Compiling tokio-websockets v0.13.3
+   Compiling tinystr v0.8.5
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.4.0
+   Compiling icu_locale_core v2.4.0
+   Compiling obws v0.15.0
+   Compiling icu_provider v2.4.0
+   Compiling icu_normalizer v2.4.0
+   Compiling icu_properties v2.4.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling url v2.5.9
+   Compiling obs-cmd v1.0.4 (/Users/kyle/.cargo/git/checkouts/obs-cmd-7d0d7e1d66ec63ad/71f5532)
+    Finished `release` profile [optimized] target(s) in 26.84s
+  Installing /Users/kyle/.cargo/bin/obs-cmd
+   Installed package `obs-cmd v1.0.4 (https://github.com/grigio/obs-cmd#71f55328)` (executable `obs-cmd`)
+/Users/kyle/.cargo/bin/obs-cmd
+#+end_example
+Why is OBS refusing the websocket? Read-only: the ports OBS listens
+on, its version, and the websocket's enabled flag and port (not the
+password).
+
+#+name: rec-ws-check
+#+begin_src sh
+  lsof -nP -iTCP -sTCP:LISTEN | grep -i obs || echo "OBS listens on no TCP port"
+  defaults read /Applications/OBS.app/Contents/Info.plist CFBundleShortVersionString
+  grep -hE '"(server_enabled|server_port)"' \
+    ~/Library/Application\ Support/obs-studio/plugin_config/obs-websocket/config.json
+#+end_src
+
+#+RESULTS: rec-ws-check
+: OBS listens on no TCP port
+: 32.1.1
+:   "server_enabled": false,
+:   "server_port": 4455
+
+Turn the websocket on. This changes OBS's config: it quits OBS (OBS
+writes its config on exit), sets =server_enabled= to true, and opens
+OBS again. Then it checks that OBS is listening.
+
+#+name: rec-ws-enable
+#+begin_src sh
+  osascript -e 'quit app "OBS"'
+  while pgrep -xq OBS; do sleep 1; done
+  sed -i '' 's/"server_enabled": false/"server_enabled": true/' \
+    ~/Library/Application\ Support/obs-studio/plugin_config/obs-websocket/config.json
+  open -a OBS
+  sleep 5
+  lsof -nP -iTCP:4455 -sTCP:LISTEN || echo "still not listening"
+#+end_src
+
+#+RESULTS: rec-ws-enable
+: COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+: OBS     52062 kyle   30u  IPv6 0x8fd2f11d11cdf801      0t0  TCP *:4455 (LISTEN)
+
+Does this shell see =OBS_WEBSOCKET_URL=? It prints the form of the URL,
+not the password.
+
+#+name: rec-ws-env
+#+begin_src sh
+  if [ -n "$OBS_WEBSOCKET_URL" ]; then
+    echo "set: $(printf %s "$OBS_WEBSOCKET_URL" | sed -E 's#(obsws://[^/]*/).*#\1***#')"
+  else
+    echo "not set in this shell"
+  fi
+#+end_src
+
+#+RESULTS: rec-ws-env
+: not set in this shell
+
+Start OBS if it isn't running, and start recording.
+
+#+name: rec-start
+#+begin_src sh
+  pgrep -xq OBS || { open -a OBS; sleep 5; }
+  touch /tmp/bb-transient-rec-start
+  # ws://:PASSWORD@HOST:PORT -> obsws://HOST:PORT/PASSWORD
+  u=$OBS_WEBSOCKET_URL
+  case $u in ws://:*@*) p=${u#ws://:}; u="obsws://${u##*@}/${p%%@*}";; esac
+  obs-cmd ${u:+--websocket "$u"} recording start 2>&1 | sed 's#//[^ ]*#//***#g'
+#+end_src
+
+#+RESULTS: rec-start
+: Executing: Start recording
+: Starting recording...
+: Recording started successfully
+
+Do the demo (=M-x bb-transient= → demo → tetris), then stop. This also
+prints the recording made since =rec-start=, which is the file the upload block takes.
+
+#+name: rec-stop
+#+begin_src sh
+  u=$OBS_WEBSOCKET_URL
+  case $u in ws://:*@*) p=${u#ws://:}; u="obsws://${u##*@}/${p%%@*}";; esac
+  obs-cmd ${u:+--websocket "$u"} recording stop 2>&1 | sed 's#//[^ ]*#//***#g'
+  sleep 2
+  find ~/Movies -maxdepth 1 -newer /tmp/bb-transient-rec-start \
+    \( -name '*.mkv' -o -name '*.mp4' -o -name '*.mov' \)
+#+end_src
+
+#+RESULTS: rec-stop
+: Executing: Stop recording
+: Stopping recording...
+: Recording stopped successfully
+: /Users/kyle/Movies/2026-11-24 11-55-08.mov
+
+Port 8080 is taken on your Mac (see =rec-oauth-check=), so the login
+comes back on 8765 instead. A "Desktop app" OAuth client accepts any
+localhost port.
+
+Upload that recording. This publishes to your YouTube channel.
+The privacy is =unlisted=: anyone with the link can watch it, but it
+isn't listed. Change it to =private= or =public= before running.
+
+#+name: rec-upload
+#+begin_src sh
+  f=$(find ~/Movies -maxdepth 1 -newer /tmp/bb-transient-rec-start \
+        \( -name '*.mkv' -o -name '*.mp4' -o -name '*.mov' \) | head -1)
+  [ -n "$f" ] || { echo "No recording since rec-start"; exit 1; }
+  echo "Uploading $f"
+  PATH="$PATH:$(go env GOPATH)/bin"
+  youtubeuploader -filename "$f" \
+    -title "bb-transient: silent commands" \
+    -description "A silent bb task opens M-x tetris from an after hook. https://github.com/kpassapk/bb-transient/pull/1" \
+    -privacy unlisted \
+    -oAuthPort 8765
+#+end_src
+
+
+#+RESULTS: rec-upload
+: Uploading /Users/kyle/Movies/2026-11-24 11-55-08.mov
+: Uploading file "/Users/kyle/Movies/2026-11-24 11-55-08.mov"
+: Progress: 101.00 Mbit/s (12.04 MiB/s), 65737k / 65737k (100.0%) ETA   0s, Elapsed 6s
+: Upload successful! Video ID: YbfCwJNN3Ns
+
+Uploaded, unlisted: [[https://youtu.be/YbfCwJNN3Ns]] (video ID
+=YbfCwJNN3Ns=). It's =~/Movies/2026-11-24 11-55-08.mov=. The first
+take, [[https://youtu.be/nl4aa8s_w_A]], is still up; delete it in
+YouTube Studio if you don't want it. Both were recorded with
+=rec-start= / =rec-stop=. The upload needed a Desktop OAuth client, the
+YouTube Data API v3 enabled in that Cloud project, and a free port for
+the login. The token is now in =request.token=, so later uploads skip
+the browser.
+
+*** Attach video link to PR
+
+Post the demo video as a comment on PR #1. This writes to GitHub: it
+adds a comment from your account. It names the repo, so it doesn't
+need to run in the checkout.
+
+#+name: pr-video
+#+begin_src sh
+  gh pr comment 1 --repo kpassapk/bb-transient --body-file - <<'BODY'
+  Demo: https://youtu.be/YbfCwJNN3Ns
+
+  `bb demo tetris` is marked silent in `bb.edn`, so its buffer stays
+  hidden, and its after hook opens `M-x tetris`.
+  BODY
+#+end_src
+
+#+RESULTS: pr-video
+: https://github.com/kpassapk/bb-transient/pull/1#issuecomment-7139970020
+
+
+Posted: [[https://github.com/kpassapk/bb-transient/pull/1#issuecomment-7139970020]]
+
 ** Copy command
 :PROPERTIES:
 :REPO:     ~/src/github.com/kpassapk/bb-transient
