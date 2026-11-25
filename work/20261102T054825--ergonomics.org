@@ -1010,6 +1010,7 @@ a =bb.edn= in the chain changes.
 :BASE:     main
 :REPO:     ~/src/github.com/kpassapk/bb-transient
 :ID:       6784E63B-30B6-4F74-AA81-18D877C5807A
+:IMAGE:    bb-claude-emacs
 :END:
 
 See [[* Interceptors]]
@@ -1036,12 +1037,123 @@ See [[* Interceptors]]
   turned into =:run= is still only copied; =:terminal= and =:silent=
   set by an interceptor are used on a run.
 
+** Result
+Branch =interceptors-in-bb-transient=, on =main=:
+- 3a25060 bb-transient.clj: intercept, a request through the layers' interceptors
+- 5193019 bb-transient.el: copy and run through the interceptors; layers command
+- 179b109 test: fake ghostel-compile through require, not a let of features
+
+What it does:
+- =bb-transient.clj= reports =interceptors= per layer, and =intercept= threads
+  a request (JSON on stdin) through every =:enter= (outermost layer first), then
+  =:line=, then every =:leave=. A layer's interceptors run in this process when
+  bb was started with that layer's =bb.edn= as =--config= (Emacs does that for
+  the outermost layer with interceptors), else in a =bb --config= of their own.
+- =bb-transient.el=: copy and run both build the request and use the =:mode=,
+  =:line=, =:dir=, =:terminal= and =:silent= the chain returns. If no layer has
+  interceptors, no process starts. On failure a copy falls back to the plain line
+  and a run doesn't happen. =bb-transient-layers-command= is cached on the
+  layers' =bb.edn= mtimes; =bb-transient-layers-functions= is obsolete and used
+  only when the command is nil.
+- README: the interceptors section, the request table, and the layers command.
+
+Where I went past or differed from the spec:
+- =:leave= also runs in reverse order inside a layer, as in Pedestal (so the
+  =:leave= of a layer's last-listed interceptor runs first).
+- The request carries =:program= (=bb-transient-program=), so =:line= still
+  respects it.
+- =bb-transient-command-line= goes through the chain as a =:run= and signals if
+  an interceptor fails.
+
+Tests:
+- =bb test:clj= passes: 8 tests, 21 assertions (order, a =:dir= moved by
+  =:enter=, a bare fn as =:leave=, throws, the CLI round trip).
+- =bb ci= passes in this sandbox's Emacs 31.1: byte-compile with warnings as
+  errors is clean, then 8 Clojure tests (21 assertions) and 63 ERT tests.
+- The first ERT run had one failure, =bb-transient-test-interceptor-terminal=:
+  it faked ghostel with a =let= of =features=, which =require= doesn't see in
+  Emacs 31. 179b109 fakes it by stubbing =require= for =ghostel-compile=
+  instead. It was a bug in the test; the code was right.
+
+Spec check (heading's list and the proposal): every Clojure and ERT test the
+heading asks for is there and passes. Introspection reports =interceptors=.
+The chain runs in bb. Each =:enter= runs outermost layer first, then =:line=
+(=--config= only when =:dir= is not =:root=), then each =:leave= innermost
+first. Copy and run both go through it. =:mode= can go from run to copy but
+never back. A failed copy falls back to the plain line with a message, and a
+failed run doesn't start; both messages name the interceptor. No process
+starts when no layer lists interceptors. The before hook still runs first on
+a run and never on a copy. The README covers the request table, the chain's
+order, the key, purity and the layers command. Only the three points above
+differ from the spec.
+- Small README mismatch: its =:args= example is =["--id=X"]= and the spec's
+  is =["--id" "X"]=. Both are valid.
+
+Left for forge: =atomforge layers --json= and setting
+=bb-transient-layers-command= in atomforge.el.
+
+
+Once the branch is landed and checked out: byte-compile and run the whole suite (Clojure, then ERT). It writes only the .elc:
+
+** land
+
+#+begin_src sh
+  aa bundle land --apply --id=6784E63B-30B6
+#+end_src
+
+#+RESULTS:
+#+begin_example
+== interceptors-in-bb-transient (new)
+179b109 test: fake ghostel-compile through require, not a let of features
+
+ test/bb-transient-test.el | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+5193019 bb-transient.el: copy and run through the interceptors; layers command
+
+ README.md                    | 111 ++++++++++++++++++++++++++++++++++++++++++++++++----
+ bb-transient.el              | 352 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++------------------------------
+ test/aa/bb.edn               |   3 ++
+ test/aa/src/aa/transient.clj |  20 ++++++++++
+ test/bb-transient-test.el    | 193 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 5 files changed, 607 insertions(+), 72 deletions(-)
+3a25060 bb-transient.clj: intercept, a request through the layers' interceptors
+
+ bb-transient.clj                     | 179 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---------
+ bb.edn                               |   9 +++++++-
+ test/bb_transient_test.clj           |  92 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ test/chain/inner/bb.edn              |   3 +++
+ test/chain/inner/src/chain/inner.clj |  11 ++++++++++
+ test/chain/outer/bb.edn              |   3 +++
+ test/chain/outer/src/chain/outer.clj |  18 ++++++++++++++++
+ 7 files changed, 304 insertions(+), 11 deletions(-)
+
+moved interceptors-in-bb-transient: (new) -> 179b109
+#+end_example
+** Checkout
+
+#+begin_src sh
+ aa bundle checkout --id=6784E63B
+#+end_src
+
+#+RESULTS:
+: /Users/kyle/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient
+
+#+TARGET: checkout ~/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient
+
+** Check                                                          :checkout:
+
+#+name: bb-transient-ci
+#+begin_src sh
+  bb ci
+#+end_src
+
 * Interceptors in forge                                               :forge:
 :PROPERTIES:
 :BRANCH:   interceptors-in-forge
 :BASE:     main
 :REPO:     ~/src/github.com/atomstream/forge
 :ID:       2BED1715-5038-45C3-85D5-B3B31664E915
+:IMAGE:    bb-claude-emacs
 :END:
 
 See [[* Interceptors]]
@@ -1050,6 +1162,280 @@ See [[* Interceptors]]
   test.
 - =atomforge layers --json=; =atomforge.el= sets the command and loses
   its chain code.
+
+** Result
+Branch =interceptors-in-forge=, on =main=:
+- eee65e4 transient: aa, an interceptor that copies commands as aa
+- c5c0fd0 cli: atomforge layers [--json], the chain for bb-transient-layers-command
+- b64791c atomforge.el: the chain from atomforge layers --json
+
+- =src/atomforge/transient.clj= has =aa= as the proposal writes it: a
+  copy becomes =aa PATH ARGS=, and a run keeps its line. forge's
+  =bb.edn= lists it in =:bb-transient/interceptors=. The test is in
+  =test/atomforge/transient_test.clj=.
+- =atomforge layers [--json] [--source-directory DIR]= prints
+  =cli.clj='s =chain= outermost first, as
+  =[{"name": …, "root": …}]=. A broken chain prints up to the break and
+  the problem goes to stderr, with exit 0. =--source-directory= takes the
+  place of =$ATOMFORGE_SOURCE_DIRECTORY=, so the defcustom gets through.
+- =atomforge.el= no longer works out the chain itself:
+  =atomforge--chain=, =--parent-name=, =--parent-dir=,
+  =--source-directory= and =--name= are gone. =atomforge-mode= and
+  =M-x atomforge= set =bb-transient-layers-command= to
+  =(atomforge-layers-command)=.
+  - The command runs this checkout's =bin/atomforge=, not plain
+    ="atomforge"= from the PATH. That way Emacs needs no atomforge on its
+    PATH, and the CLI is the same version as the =.el=. If the file is
+    missing it falls back to ="atomforge"=.
+  - =atomforge-layers= stays on =bb-transient-layers-functions=. It runs
+    the same command, so the menu keeps its layers with a bb-transient
+    that has no =bb-transient-layers-command= yet (the =Interceptors=
+    task). Remove it with that obsolete fallback.
+
+=bb test=: the new tests pass. The 11 failures are all in =ec_test=, and
+=main= fails the same 11 here: they need an emacs binary, which this
+sandbox lacks. I ran =atomforge layers= by hand on the
+=emacs/test/fixture= projects, including the missing parent.
+
+Not run: the ERT tests (=emacs/test/atomforge-test.el=), for lack of
+Emacs. I rewrote the chain tests there to go through the command (they
+need bb on PATH). The aa copy from a real menu waits on bb-transient's
+=intercept= step.
+
+Behaviour changes:
+- =atomforge layers= is now a subcommand of the CLI, so it shadows any
+  project task named =layers=.
+- The menu's chain now also reads =$ATOMFORGE_SOURCE_DIRECTORY= when it
+  is set in Emacs's environment, as =aa= already did.
+
+** Land
+
+#+begin_src sh
+  bb bundle land --apply --id=2BED1715-5038
+#+end_src
+
+#+RESULTS:
+#+begin_example
+== interceptors-in-forge (new)
+b64791c atomforge.el: the chain from atomforge layers --json
+
+ README.md                    |  12 +++++++++---
+ emacs/atomforge.el           | 126 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++--------------------------------------------------------------------
+ emacs/test/atomforge-test.el |  80 +++++++++++++++++++++++++-------------------------------------------------------
+ 3 files changed, 92 insertions(+), 126 deletions(-)
+c5c0fd0 cli: atomforge layers [--json], the chain for bb-transient-layers-command
+
+ src/atomforge/cli.clj   | 63 ++++++++++++++++++++++++++++++++++++++++++++++++++++-----------
+ test/atomforge_test.clj | 18 ++++++++++++++++++
+ 2 files changed, 70 insertions(+), 11 deletions(-)
+eee65e4 transient: aa, an interceptor that copies commands as aa
+
+ bb.edn                            |  6 ++++--
+ src/atomforge/transient.clj       | 12 ++++++++++++
+ test/atomforge/transient_test.clj | 16 ++++++++++++++++
+ 3 files changed, 32 insertions(+), 2 deletions(-)
+
+moved interceptors-in-forge: (new) -> b64791c
+#+end_example
+
+** Checkout
+
+#+begin_src sh
+bb bundle checkout --id=2BED1715
+#+end_src
+
+#+RESULTS:
+: /Users/kyle/src/github.com/atomstream/forge-interceptors-in-forge
+
+#+TARGET: checkout ~/src/github.com/atomstream/forge-interceptors-in-forge
+
+** Check                                                          :checkout:
+:PROPERTIES:
+:REPO:     ~/src/github.com/atomstream/forge-interceptors-in-forge
+:END:
+
+I have a checkout of bb-transient.
+[[target:bb_transient_checkout]]
+
+Help me try it here.
+
+- Evaluate elisp from checkout as necessary
+- I will use the transient menu and copy the command
+- I expect it to be 'aa'
+
+
+
+#+begin_src sh
+bb emacs ci
+#+end_src
+
+#+RESULTS:
+: In toplevel form:
+: emacs/atomforge.el:39:11: Error: Cannot open load file: No such file or directory, bb-transient
+: 
+: In toplevel form:
+: emacs/forge-transient.el:12:11: Error: Cannot open load file: No such file or directory, bb-transient
+: 
+: In toplevel form:
+: emacs/atomforge-target.el:24:11: Error: Cannot open load file: No such file or directory, devops
+
+
+=bb emacs ci= can't find two libraries. =src/emacs.clj= looks for
+bb-transient at =$BB_TRANSIENT=, or else =../bb-transient=. From this
+checkout that is =~/src/github.com/atomstream/bb-transient=, which
+doesn't exist. And =compile= and =test= never put devops.el on the load
+path: only =target-coordinates= reads =$DEVOPS_EL=. The block below runs
+it again with =BB_TRANSIENT= set to the interceptors checkout of
+bb-transient, which has =bb-transient-layers-command= for the new
+=atomforge.el=. If =$DEVOPS_EL= is set, it also goes on the load path
+through =EMACSLOADPATH=. The trailing =:= keeps the default load path.
+It only compiles and tests, and deletes its =.elc= files afterwards.
+
+#+name: forge-emacs-ci
+#+begin_src sh
+export BB_TRANSIENT=~/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient
+if [ -n "$DEVOPS_EL" ]; then export EMACSLOADPATH="$DEVOPS_EL:"; fi
+echo "DEVOPS_EL=${DEVOPS_EL:-unset}"
+bb emacs ci
+#+end_src
+
+#+RESULTS: forge-emacs-ci
+: DEVOPS_EL=unset
+: 
+: In toplevel form:
+: emacs/atomforge.el:182:20: Error: ‘bb-transient-layers-functions’ is an obsolete variable (as of 0.3.0); use ‘bb-transient-layers-command’ instead.
+:
+
+
+*** Try it
+
+These blocks put the two checkouts' Elisp into your Emacs, then ask
+for a copied line the way the menu does. The first changes your
+running Emacs: it loads =bb-transient.el= from the bb-transient
+interceptors checkout and =atomforge.el= from this one with
+=load-file= (so each finds its own =bb-transient.clj= and
+=bin/atomforge=), empties bb-transient's task cache, and turns
+=atomforge-mode= off and on so =bb-transient-layers-command= points at
+this checkout's =bin/atomforge=. Restarting Emacs undoes it.
+
+#+name: try-load-checkouts
+#+begin_src emacs-lisp
+;; Off first: before fb0ba07, atomforge.el fails to load with the mode on.
+(when (bound-and-true-p atomforge-mode) (atomforge-mode -1))
+(load-file "~/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient/bb-transient.el")
+(load-file "~/src/github.com/atomstream/forge-interceptors-in-forge/emacs/atomforge.el")
+(clrhash bb-transient--cache)
+(atomforge-mode -1)
+(atomforge-mode 1)
+(list :script bb-transient--script
+      :atomforge (symbol-file 'atomforge-layers-command)
+      :layers-command bb-transient-layers-command)
+#+end_src
+
+#+RESULTS: try-load-checkouts
+| :script | /Users/kyle/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient/bb-transient.clj | :atomforge | /Users/kyle/src/github.com/atomstream/forge-interceptors-in-forge/emacs/atomforge.el | :layers-command | (/Users/kyle/src/github.com/atomstream/forge-interceptors-in-forge/bin/atomforge layers --json) |
+
+The forge layer of a project is found by name: bb-transient's
+=:forge/parent "atomstream/forge"= resolves to
+=~/src/github.com/atomstream/forge=, your main forge checkout, not this
+one. The interceptor runs from that layer's =bb.edn=, so it has to list
+=:bb-transient/interceptors= there too. This block, read-only, shows
+the chain from the bb-transient checkout and whether each layer lists
+an interceptor.
+
+#+name: try-layers
+#+begin_src sh
+bt=~/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient
+(cd "$bt" && ~/src/github.com/atomstream/forge-interceptors-in-forge/bin/atomforge layers --json)
+echo
+for d in ~/src/github.com/atomstream/forge "$bt"; do
+  printf '%s: ' "$d"; git -C "$d" log --oneline -1
+  grep -n 'bb-transient/interceptors' "$d/bb.edn" || echo '  (no interceptors)'
+done
+#+end_src
+
+#+RESULTS: try-layers
+: 7bc55e0a-cbd6-4cf8-98ce-4040642585e4
+
+This asks bb-transient for a copy of =bb sandbox up --id X= from the
+bb-transient checkout, as the menu does in copy mode, without opening
+the menu. It only puts the line on the kill ring. It should come back
+as =aa sandbox up --id X=; a message says so if an interceptor failed
+and you got the plain line.
+
+#+name: try-copy
+#+begin_src emacs-lisp
+(bb-transient--copy "~/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient/"
+                    '("sandbox" "up") '("--id" "X"))
+#+end_src
+
+#+RESULTS: try-copy
+: aa sandbox up --id X
+
+Then the real thing: in a buffer of the bb-transient checkout, =C-c
+C-f= (or =M-x atomforge=), switch to copy mode, pick any forge command
+and paste it. The line should start with =aa=. A run from the menu
+still uses =bb --config …=.
+
+#+begin_example
+bb --config /Users/kyle/src/github.com/atomstream/forge/bb.edn sandbox dired
+#+end_example
+
+=try-copy= gave =aa sandbox up --id X=: a copy from the bb-transient
+checkout goes through forge's =aa= interceptor. Left to try: the menu
+itself (copy mode, then paste), which makes the same request.
+
+*** Why the menu copied =bb --config …=
+
+The menu's copy of =sandbox dired= came out as =bb --config …=, and
+=try-copy= as =aa …=, though both call =bb-transient--copy=. Here, in
+batch Emacs with the same two checkouts, the menu's request (the one
+with the task's node) gives =aa sandbox dired=, so it is something in
+your Emacs. When an interceptor fails, the copy falls back to the
+plain line, and the message after it says why. This block, read-only,
+shows the last copy messages from =*Messages*=, and the menu's layers
+as your Emacs has them.
+
+#+name: try-copy-messages
+#+begin_src emacs-lisp
+(with-current-buffer "*Messages*"
+  (save-excursion
+    (goto-char (point-min))
+    (let (lines)
+      (while (re-search-forward "^Copied.*$" nil t)
+        (push (match-string 0) lines))
+      (list :messages (seq-take lines 5)
+            :menu-layers bb-transient--menu-layers))))
+#+end_src
+
+#+RESULTS: try-copy-messages
+| :messages | (Copied: bb --config /Users/kyle/src/github.com/atomstream/forge/bb.edn sandbox dired Copied: bb --config /Users/kyle/src/github.com/atomstream/forge/bb.edn sandbox up Copied: aa sandbox up --id X Copied: bb work snapshot --book=ergonomics Copied: bb bundle diff --id=2BED1715-5038-45C3-85D5-B3B31664E915) | :menu-layers | ((atomstream/forge . /Users/kyle/src/github.com/atomstream/forge/) (kpassapk/bb-transient-interceptors-in-bb-transient . /Users/kyle/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient/)) |
+
+
+The messages are plain =Copied:=, not =Copied, without the layers'
+interceptors (…)=: nothing failed, so either no layer listed
+interceptors when the menu made its request, or the menu ran a
+=bb-transient--copy= that isn't the interceptors checkout's (the old
+one prints the same =Copied:=). The menu's layers are right. This
+block, read-only, shows which file each function comes from now, the
+arity of =bb-transient--copy= (the old one takes 3 arguments, the new
+one 3 or 4), and the interceptor roots and line of a copy request for
+=sandbox dired=, made the way the menu makes it.
+
+#+name: try-copy-which
+#+begin_src emacs-lisp
+(let* ((forge (cdr (assoc "atomstream/forge" bb-transient--menu-layers)))
+       (request (bb-transient--request "copy" forge '("sandbox" "dired") nil)))
+  (list :copy-file (symbol-file 'bb-transient--copy)
+        :copy-arity (func-arity 'bb-transient--copy)
+        :copy-current-file (symbol-file 'bb-transient-copy-current)
+        :script bb-transient--script
+        :roots (bb-transient--interceptor-roots request)
+        :line (alist-get 'line (bb-transient--final request))))
+#+end_src
+
+#+RESULTS: try-copy-which
+: (:copy-file /Users/kyle/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient/bb-transient.el :copy-arity (3 . 4) :copy-current-file /Users/kyle/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient/bb-transient.el :script /Users/kyle/src/github.com/kpassapk/bb-transient-interceptors-in-bb-transient/bb-transient.clj :roots nil :line (bb --config /Users/kyle/src/github.com/atomstream/forge/bb.edn sandbox dired))
 
 
 
