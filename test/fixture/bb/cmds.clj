@@ -41,6 +41,14 @@
   (println msg)
   (System/exit 2))
 
+(defn ask
+  "Prompts for a name, then greets it"
+  {:bb-transient/silent true}
+  [_]
+  (print "Name? ")
+  (flush)
+  (println "hi" (read-line)))
+
 (defn serve
   "Prints its options, then waits to be killed"
   {:org.babashka/cli {:spec {:port {:desc "Where to listen"}}}}

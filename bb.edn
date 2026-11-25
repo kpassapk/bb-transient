@@ -20,4 +20,8 @@
       :depends [compile test]}
 
   demo {:doc "Demo time!"
-        :cmd {:greet {:exec-fn demo/greet}}}}}
+        :cmd {:greet {:exec-fn demo/greet}
+              :tetris {:exec-fn demo/tetris
+                       :bb-transient/silent true
+                       :bb-transient/after (fn [{:keys [exit]}]
+                                             (when (zero? exit) (el/tetris)))}}}}}

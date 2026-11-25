@@ -41,6 +41,11 @@
 ;; while it is still running, running it again selects its buffer
 ;; instead of starting it over.
 ;;
+;; A command marked `:bb-transient/silent true' runs without showing its
+;; buffer: it pops up when the command fails or seems to ask for input,
+;; and a message says when it is done.  `s' in an options menu flips it
+;; for one run.
+;;
 ;; An option can be filled in from where point is.  bb.edn's
 ;; `:bb-transient/defaults' maps option names to cljbang forms:
 ;;
@@ -203,6 +208,7 @@ Cached until bb.edn changes, or REFRESH.  A node is an alist:
             name, desc, alias, require, default and boolean
   terminal  non-nil when it should run in a terminal
   singleton non-nil when running it again while it runs switches to it
+  silent    non-nil when its buffer is shown only on failure or input
   defaults  for a leaf, an alist of option name to cljbang source
   before    the cljbang source of its before hook, or nil
   after     the same for its after hook
@@ -298,7 +304,8 @@ straight away."
                       (bb-transient--copy root path nil)
                     (bb-transient--run root path nil (xor terminal flip)
                                        (get sym 'bb-transient-hooks)
-                                       (alist-get 'singleton node))))))
+                                       (alist-get 'singleton node)
+                                       (alist-get 'silent node))))))
     sym))
 
 (defun bb-transient--stub (sym)
@@ -353,7 +360,9 @@ property, so the stub has one, and the menu still stacks on its parent."
     (bb-transient--eval
      `(transient-define-prefix ,sym ()
         ,(or (alist-get 'doc node) heading)
-        ,@(when (alist-get 'terminal node) '(:value '("++terminal")))
+        ,@(when-let* ((value (append (when (alist-get 'terminal node) '("++terminal"))
+                                     (when (alist-get 'silent node) '("++silent")))))
+            `(:value ',value))
         :init-value #'bb-transient--init-value
         [,(concat heading
                   (when-let* ((doc (alist-get 'doc node)))
@@ -362,7 +371,8 @@ property, so the stub has one, and the menu still stacks on its parent."
          ("-=" "Extra arguments" "++=" :prompt "Extra arguments: ")]
         [("RET" "Run" bb-transient-run-current)
          ("_" "Copy command" bb-transient-copy-current)
-         ("t" "In a terminal" "++terminal")]))))
+         ("t" "In a terminal" "++terminal")
+         ("s" "Silently" "++silent")]))))
 
 ;;;; Filling in options
 
@@ -540,10 +550,10 @@ is gone."
   "Turn transient ARGS into a bb argument list.
 The `++=' extra-arguments value is split like a shell command line
 and goes last, so options stay before any `--' it holds; the
-`++terminal' switch is dropped."
+`++terminal' and `++silent' switches are dropped."
   (let (options extra)
     (dolist (a args)
-      (cond ((equal a "++terminal"))
+      (cond ((member a '("++terminal" "++silent")))
             ((string-prefix-p "++=" a)
              (setq extra (append extra (split-string-shell-command (substring a 3)))))
             (t (push a options))))
@@ -643,12 +653,52 @@ is passed as --config when that is not ROOT."
               (proc (get-buffer-process buf)))
     (and (process-live-p proc) buf)))
 
-(defun bb-transient--run (root path args &optional terminal hooks singleton)
+(defconst bb-transient--prompt-delay 0.3
+  "Seconds a silent command's last, unfinished line must stand to be a prompt.")
+
+(defun bb-transient--silence (buf path)
+  "Keep BUF, a silent run of bb PATH, out of sight unless it needs you.
+It is shown when the command exits non-zero, or when it has written a
+line with no newline and nothing more for `bb-transient--prompt-delay'
+seconds while still running: probably a prompt.  An exit of 0 is only
+a message."
+  (when-let* ((proc (get-buffer-process buf)))
+    (let ((name (string-join path " "))
+          timer)
+      (add-function
+       :after (process-filter proc)
+       (lambda (proc string)
+         (when timer (cancel-timer timer) (setq timer nil))
+         (unless (or (string-suffix-p "\n" string)
+                     (get-buffer-window buf t))
+           (setq timer
+                 (run-at-time bb-transient--prompt-delay nil
+                              (lambda ()
+                                (setq timer nil)
+                                (when (process-live-p proc)
+                                  (display-buffer buf)
+                                  (message "bb %s is waiting for input" name))))))))
+      ;; Added before the after hook's, so it runs first: the hook's own
+      ;; messages and windows win.
+      (add-function
+       :after (process-sentinel proc)
+       (lambda (proc _event)
+         (unless (process-live-p proc)
+           (when timer (cancel-timer timer))
+           (if (eql (process-exit-status proc) 0)
+               (message "bb %s: done" name)
+             (setq next-error-last-buffer buf)
+             (display-buffer buf))))))))
+
+(defun bb-transient--run (root path args &optional terminal hooks singleton silent)
   "Run bb PATH with ARGS, using ROOT's bb.edn, and return the output buffer.
 It runs from `bb-transient--directory', passing ROOT's bb.edn as
 --config when that is not ROOT.  The buffer is a compilation buffer,
 or with TERMINAL an interactive `ghostel-compile' buffer, so TUIs get
 a real terminal.
+
+With SILENT, and no TERMINAL, the buffer is not shown unless the
+command fails or asks for input; see `bb-transient--silence'.
 
 With SINGLETON, when PATH is still running from an earlier call,
 select its buffer and return it instead: nothing is started, ARGS are
@@ -663,11 +713,11 @@ returns nil."
         (pop-to-buffer buf)
         (message "bb %s is already running" (string-join path " "))
         buf)
-    (bb-transient--start root path args terminal hooks)))
+    (bb-transient--start root path args terminal hooks silent)))
 
-(defun bb-transient--start (root path args terminal hooks)
+(defun bb-transient--start (root path args terminal hooks silent)
   "Start bb PATH with ARGS for `bb-transient--run', which see.
-ROOT, TERMINAL and HOOKS are as there."
+ROOT, TERMINAL, HOOKS and SILENT are as there."
   (let* ((hooks (bb-transient--usable-hooks hooks path))
          (origin (current-buffer))
          (default-directory (bb-transient--directory root))
@@ -692,7 +742,17 @@ ROOT, TERMINAL and HOOKS are as there."
                         (let ((ghostel-compile-buffer-name name))
                           (ghostel-compile command t)))
                     (let ((compilation-buffer-name-function (lambda (_mode) name)))
-                      (compile command bb-transient-use-comint)))))
+                      (if (not silent)
+                          (compile command bb-transient-use-comint)
+                        ;; `compile' asks for a window with `allow-no-window'.
+                        (let ((display-buffer-overriding-action
+                               '(display-buffer-no-window (allow-no-window . t)))
+                              (last next-error-last-buffer))
+                          (prog1 (compile command bb-transient-use-comint)
+                            ;; Leave `next-error' with what you can see.
+                            (setq next-error-last-buffer last))))))))
+        (when (and silent (not terminal))
+          (bb-transient--silence buf path))
         (when (alist-get 'after hooks)
           ;; The process can't have written yet: its filter only runs
           ;; once Emacs waits.  A terminal's output is its whole text.
@@ -708,20 +768,22 @@ block or a message to an agent."
   (let ((bb-transient--menu-directory nil))
     (bb-transient--line (or project (bb-transient-project)) path args)))
 
-(defun bb-transient-run (path &optional args project terminal)
+(defun bb-transient-run (path &optional args project terminal silent)
   "Run bb task PATH (a list of names) with ARGS and return its buffer.
 PROJECT is the directory whose bb.edn defines the task; nil means the
 current project.  It runs from `bb-transient-directory-function', in
-a compilation buffer, or with TERMINAL a `ghostel-compile' one.  A
-task marked `:bb-transient/singleton' that is still running is
-switched to instead."
+a compilation buffer, or with TERMINAL a `ghostel-compile' one.  With
+SILENT the compilation buffer is shown only if the command fails or
+asks for input.  A task marked `:bb-transient/singleton' that is still
+running is switched to instead."
   (let ((bb-transient--menu-directory nil)
         (root (or project (bb-transient-project))))
     (bb-transient--run root path args terminal nil
                        ;; Only a task that may be running needs looking up.
                        (and (bb-transient--running path)
                             (alist-get 'singleton
-                                       (ignore-errors (bb-transient--node root path)))))))
+                                       (ignore-errors (bb-transient--node root path))))
+                       silent)))
 
 (defun bb-transient--current-args ()
   "The current options menu's bb arguments, or signal if one is missing."
@@ -739,13 +801,15 @@ When the top menu asked for copying, copy it instead."
   (interactive)
   (if bb-transient--copy
       (bb-transient-copy-current)
-    (let ((sym transient-current-command))
+    (let* ((sym transient-current-command)
+           (value (transient-args sym)))
       (bb-transient--run (get sym 'bb-transient-root)
                          (get sym 'bb-transient-path)
                          (bb-transient--current-args)
-                         (member "++terminal" (transient-args sym))
+                         (member "++terminal" value)
                          (get sym 'bb-transient-hooks)
-                         (alist-get 'singleton (get sym 'bb-transient-node))))))
+                         (alist-get 'singleton (get sym 'bb-transient-node))
+                         (member "++silent" value)))))
 
 (transient-define-suffix bb-transient-copy-current ()
   "Copy the command line `bb-transient-run-current' would run.

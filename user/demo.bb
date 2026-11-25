@@ -8,3 +8,8 @@
   (println (case lang
              "zh" (str "你好, " name "！")
              (str "Hi, " name "!"))))
+
+(defn tetris
+  "Play tetris, in the Emacs that ran this"
+  [_]
+  (println "Shuffling the pieces..."))
