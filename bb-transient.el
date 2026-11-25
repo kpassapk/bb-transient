@@ -61,9 +61,20 @@
 ;; namespace is required from bb.edn's `:bb-transient/cljbang-paths'.
 ;;
 ;; A menu can show other projects' tasks too, a group per project:
-;; each function in `bb-transient-layers-functions' names some.  Their
-;; commands run from the current project with their own bb.edn as
-;; --config, and the current project's tasks hide theirs by name.
+;; `bb-transient-layers-command' prints them.  Their commands run from
+;; the current project with their own bb.edn as --config, and the
+;; current project's tasks hide theirs by name.
+;;
+;; A layer can take part in how a command is run or copied, with
+;; interceptors listed in its bb.edn:
+;;
+;;   :bb-transient/interceptors [forge.transient/aa]
+;;
+;; Picking a command makes a request, a map of what the menu decided;
+;; bb-transient.clj threads it through every layer's interceptors,
+;; each a pure function of the map, and builds the command line on the
+;; way.  Emacs then copies the line, or runs it.  A menu whose layers
+;; list none starts no process for it.
 
 ;;; Code:
 
@@ -117,15 +128,34 @@ session."
                  (const :tag "Never" nil)
                  (const :tag "Ask once per project" ask)))
 
+(defcustom bb-transient-layers-command nil
+  "A program and its arguments printing the projects to show in the menu.
+It runs in the current project's directory and prints the layers as
+JSON, outermost first:
+
+  [{\"name\": \"atomstream/forge\", \"root\": \"/home/me/src/forge/\"}, ...]
+
+A relative root is taken from the current project.  Each root's bb.edn
+tasks become a group headed by its name, above the current project's
+own, and an inner project's task hides an outer one of the same name.
+A layer whose root is the current project labels its group.  Commands
+still run from the current project; see
+`bb-transient-directory-function'.  The layers are also the chain of
+interceptors a command goes through; see `bb-transient--final'.
+
+Its output is cached until a bb.edn among them changes.  nil means just
+the current project, or `bb-transient-layers-functions'."
+  :type '(choice (const :tag "Just the project" nil)
+                 (repeat :tag "Command" string)))
+
 (defvar bb-transient-layers-functions nil
   "Functions naming other projects to show in the menu.
-Each is called with the current project's directory and returns a
-list of (LABEL . DIRECTORY), outermost first.  Each DIRECTORY's bb.edn
-tasks become a group headed LABEL, above the current project's own,
-and an inner project's task hides an outer one of the same name.
-A function that returns the current project itself labels its group.
-Commands still run from the current project; see
-`bb-transient-directory-function'.")
+Used only when `bb-transient-layers-command' is nil.  Each is called
+with the current project's directory and returns a list of
+\(LABEL . DIRECTORY), outermost first, as the command's output.")
+
+(make-obsolete-variable 'bb-transient-layers-functions
+                        'bb-transient-layers-command "0.3.0")
 
 (defconst bb-transient--script
   (expand-file-name "bb-transient.clj"
@@ -186,7 +216,8 @@ An alist of `tasks' and, if bb.edn has them, `cljbang-paths'."
 
 (defun bb-transient--read (root &optional refresh)
   "The introspection of the project in ROOT, cached until bb.edn changes.
-REFRESH reads it again regardless."
+REFRESH reads it again regardless.  An alist of `tasks' and, if bb.edn
+has them, `cljbang-paths' and `interceptors'."
   (let* ((root (file-name-as-directory (expand-file-name root)))
          (mtime (file-attribute-modification-time
                  (file-attributes (expand-file-name "bb.edn" root))))
@@ -301,11 +332,12 @@ straight away."
       (fset sym (lambda (&optional flip)
                   (interactive "P")
                   (if bb-transient--copy
-                      (bb-transient--copy root path nil)
+                      (bb-transient--copy root path nil node)
                     (bb-transient--run root path nil (xor terminal flip)
                                        (get sym 'bb-transient-hooks)
                                        (alist-get 'singleton node)
-                                       (alist-get 'silent node))))))
+                                       (alist-get 'silent node)
+                                       node)))))
     sym))
 
 (defun bb-transient--stub (sym)
@@ -577,14 +609,16 @@ and goes last, so options stay before any `--' it holds; the
       arg
     (shell-quote-argument arg)))
 
+(defun bb-transient--join (words)
+  "The shell command line for WORDS, each quoted as need be."
+  (mapconcat #'bb-transient--quote words " "))
+
 (defun bb-transient--command (path args &optional config)
   "The shell command line for bb PATH with ARGS.
 With CONFIG, a bb.edn file, pass it as --config."
-  (mapconcat #'bb-transient--quote
-             (append (list bb-transient-program)
-                     (when config (list "--config" config))
-                     path args)
-             " "))
+  (bb-transient--join (append (list bb-transient-program)
+                              (when config (list "--config" config))
+                              path args)))
 
 ;; Copying a command instead of running it, for driving a workflow
 ;; from outside Emacs: an agent only sees commands in source blocks.
@@ -600,13 +634,24 @@ A refresh closes the menu only to reopen it, so it keeps the flag."
 
 (add-hook 'transient-exit-hook #'bb-transient--clear-copy)
 
-(defun bb-transient--copy (root path args)
+(defun bb-transient--copy (root path args &optional node)
   "Put the command line for bb PATH with ARGS in ROOT on the kill ring.
-It is the line a run would use, but no before hook is called, as it
-can have effects.  Return the line."
-  (let ((line (bb-transient--line root path args)))
+NODE is PATH's node, looked up when nil and needed.  The line is the
+one the layers' interceptors make of a `copy' request, which may differ
+from a run's; no before hook is called, as it can have effects.  When
+an interceptor fails, the line is the one without them, and a message
+says why.  Return the line."
+  (let* ((request (bb-transient--request "copy" root path args node))
+         why
+         (words (condition-case err
+                    (alist-get 'line (bb-transient--final request))
+                  (error (setq why (error-message-string err))
+                         (bb-transient--words request))))
+         (line (bb-transient--join words)))
     (kill-new line)
-    (message "Copied: %s" line)
+    (if why
+        (message "Copied, without the layers' interceptors (%s): %s" why line)
+      (message "Copied: %s" line))
     line))
 
 (defvar bb-transient--menu-directory nil
@@ -623,14 +668,109 @@ The directory the open menu decided on, else
        (ignore-errors (funcall bb-transient-directory-function))
        root)))
 
-(defun bb-transient--line (root path args)
-  "The command line for bb PATH with ARGS, run from project ROOT's bb.edn.
-The directory is the one `bb-transient--run' would use, so ROOT's bb.edn
-is passed as --config when that is not ROOT."
-  (let ((dir (bb-transient--directory root)))
-    (bb-transient--command path args
-                           (unless (file-equal-p dir root)
-                             (expand-file-name "bb.edn" root)))))
+(defvar bb-transient--menu-layers nil
+  "The open menu's layers, as `bb-transient--layers' returns them, or nil.")
+
+(defun bb-transient--current-layers ()
+  "The layers a command goes through: the open menu's, else the project's."
+  (or bb-transient--menu-layers
+      (ignore-errors (bb-transient--layers (bb-transient-project)))))
+
+(defun bb-transient--request (mode root path args &optional node terminal silent)
+  "A request for bb PATH with ARGS from ROOT's bb.edn, as an alist.
+MODE is \"run\" or \"copy\".  NODE is PATH's node, if at hand.  The
+keys are those of the request bb-transient.clj threads through the
+layers' interceptors: see the README.  The buffer it is made in is the
+origin."
+  `((mode . ,mode)
+    (path . ,path)
+    (args . ,args)
+    (root . ,(file-name-as-directory (expand-file-name root)))
+    (dir . ,(file-name-as-directory (bb-transient--directory root)))
+    (layers . ,(mapcar (pcase-lambda (`(,label . ,dir))
+                         `((name . ,label) (root . ,dir)))
+                       (bb-transient--current-layers)))
+    (origin . ((file . ,(buffer-file-name)) (directory . ,default-directory)))
+    (task . ,node)
+    (terminal . ,terminal)
+    (silent . ,silent)
+    (program . ,bb-transient-program)))
+
+(defun bb-transient--words (request)
+  "The words of REQUEST's command line, as no interceptor changed them.
+ROOT's bb.edn is passed as --config when the directory is not ROOT.
+bb-transient.clj's `line' does the same in the chain."
+  (let-alist request
+    (append (list bb-transient-program)
+            (unless (file-equal-p .dir .root)
+              (list "--config" (expand-file-name "bb.edn" .root)))
+            .path .args)))
+
+(defun bb-transient--interceptor-roots (request)
+  "The roots of REQUEST's layers whose bb.edn lists interceptors."
+  (seq-keep (lambda (layer)
+              (let ((root (alist-get 'root layer)))
+                (and (alist-get 'interceptors (ignore-errors (bb-transient--read root)))
+                     root)))
+            (alist-get 'layers request)))
+
+(defun bb-transient--json (x)
+  "X, an alist from a request or a node, made fit for `json-serialize'."
+  (cond ((null x) :null)
+        ((and (consp x) (consp (car x)) (symbolp (caar x)))
+         (let ((table (make-hash-table :test #'equal)))
+           (pcase-dolist (`(,k . ,v) x)
+             (puthash (symbol-name k) (bb-transient--json v) table))
+           table))
+        ((consp x) (vconcat (mapcar #'bb-transient--json x)))
+        (t x)))
+
+(defun bb-transient--intercept (request roots)
+  "REQUEST as bb-transient.clj's `intercept' returns it, or signal.
+ROOTS are the layers that list interceptors.  It runs with the first's
+bb.edn as --config, so that layer's interceptors run in the same
+process."
+  (let ((default-directory (car roots))
+        (coding-system-for-write 'utf-8)
+        (coding-system-for-read 'utf-8)
+        (stderr (make-temp-file "bb-transient-err")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert (json-serialize (bb-transient--json request)))
+          (let ((status (call-process-region
+                         (point-min) (point-max) bb-transient-program t (list t stderr) nil
+                         "--config" (expand-file-name "bb.edn" (car roots))
+                         "-f" bb-transient--script "intercept")))
+            (unless (eql status 0)
+              (error "%s" (let ((msg (with-temp-buffer
+                                       (insert-file-contents stderr)
+                                       (string-trim (buffer-string)))))
+                            (if (string-empty-p msg) (format "bb exited %s" status) msg))))
+            ;; Namespaces may print as they load; the JSON is the last line.
+            (goto-char (point-max))
+            (forward-line -1)
+            (json-parse-buffer :object-type 'alist :array-type 'list
+                               :null-object nil :false-object nil)))
+      (delete-file stderr))))
+
+(defun bb-transient--final (request)
+  "REQUEST as the layers' interceptors leave it, or signal if one fails.
+When a layer lists interceptors, bb-transient.clj runs them: every
+:enter, outermost layer first, then the `line' step, then every :leave
+the other way.  Otherwise it only gets its line, here.  Emacs reads
+`mode', `line', `dir', `terminal' and `silent' from the result; a
+copy stays a copy."
+  (if-let* ((roots (bb-transient--interceptor-roots request)))
+      (let* ((request (if (alist-get 'task request)
+                          request
+                        (let-alist request
+                          (cons (cons 'task (ignore-errors (bb-transient--node .root .path)))
+                                request))))
+             (final (bb-transient--intercept request roots)))
+        (if (equal (alist-get 'mode request) "copy")
+            (cons '(mode . "copy") final)
+          final))
+    (cons (cons 'line (bb-transient--words request)) request)))
 
 (defun bb-transient--buffer-name (path)
   "The name of the output buffer for bb PATH."
@@ -690,7 +830,7 @@ a message."
              (setq next-error-last-buffer buf)
              (display-buffer buf))))))))
 
-(defun bb-transient--run (root path args &optional terminal hooks singleton silent)
+(defun bb-transient--run (root path args &optional terminal hooks singleton silent node)
   "Run bb PATH with ARGS, using ROOT's bb.edn, and return the output buffer.
 It runs from `bb-transient--directory', passing ROOT's bb.edn as
 --config when that is not ROOT.  The buffer is a compilation buffer,
@@ -707,33 +847,53 @@ ignored and no hook is called.
 HOOKS, from `bb-transient--hooks', are called here: before with the
 args and directory, which may return new args, and after once the
 process exits.  A before hook that signals cancels the run, and
-returns nil."
+returns nil.
+
+The command then goes through the layers' interceptors as a `run'
+request (see `bb-transient--final'), NODE being PATH's node if at hand.
+They decide the line, the directory, TERMINAL and SILENT, or that it is
+copied instead, which returns nil.  When one fails nothing runs, and
+nil is returned."
   (if-let* ((buf (and singleton (bb-transient--running path))))
       (progn
         (pop-to-buffer buf)
         (message "bb %s is already running" (string-join path " "))
         buf)
-    (bb-transient--start root path args terminal hooks silent)))
+    (bb-transient--start root path args terminal hooks silent node)))
 
-(defun bb-transient--start (root path args terminal hooks silent)
+(defun bb-transient--start (root path args terminal hooks silent &optional node)
   "Start bb PATH with ARGS for `bb-transient--run', which see.
-ROOT, TERMINAL, HOOKS and SILENT are as there."
+ROOT, TERMINAL, HOOKS, SILENT and NODE are as there."
   (let* ((hooks (bb-transient--usable-hooks hooks path))
          (origin (current-buffer))
-         (default-directory (bb-transient--directory root))
          (args (condition-case err
                    (if-let* ((new (bb-transient--call-hook
                                    hooks 'before (list :args (vconcat args)
-                                                       :dir default-directory))))
+                                                       :dir (bb-transient--directory root)))))
                        (append new nil)
                      args)
                  (error (message "bb-transient: before hook, not running: %s"
                                  (bb-transient--error-message err))
-                        'cancel))))
-    (unless (eq args 'cancel)
-      (let* ((config (unless (file-equal-p default-directory root)
-                       (expand-file-name "bb.edn" root)))
-             (command (bb-transient--command path args config))
+                        'cancel)))
+         (final (unless (eq args 'cancel)
+                  (condition-case err
+                      (bb-transient--final
+                       (bb-transient--request "run" root path args node terminal silent))
+                    (error (message "bb-transient: not running bb %s: %s"
+                                    (string-join path " ") (error-message-string err))
+                           nil)))))
+    (cond
+     ((null final) nil)
+     ((equal (alist-get 'mode final) "copy")
+      (let ((line (bb-transient--join (alist-get 'line final))))
+        (kill-new line)
+        (message "Copied: %s" line)
+        nil))
+     (t
+      (let* ((default-directory (file-name-as-directory (alist-get 'dir final)))
+             (terminal (alist-get 'terminal final))
+             (silent (alist-get 'silent final))
+             (command (bb-transient--join (alist-get 'line final)))
              (name (bb-transient--buffer-name path))
              (buf (if terminal
                       (progn
@@ -758,15 +918,21 @@ ROOT, TERMINAL, HOOKS and SILENT are as there."
           ;; once Emacs waits.  A terminal's output is its whole text.
           (bb-transient--watch buf (unless terminal (with-current-buffer buf (point-max)))
                                args hooks origin))
-        buf))))
+        buf)))))
 
 (defun bb-transient-command-line (path &optional args project)
   "The shell command line for bb task PATH (a list of names) with ARGS.
 PROJECT is the directory whose bb.edn defines the task; nil means the
-current project.  Nothing is run.  For your own glue, such as an org
-block or a message to an agent."
-  (let ((bb-transient--menu-directory nil))
-    (bb-transient--line (or project (bb-transient-project)) path args)))
+current project.  It is the line a run would use, interceptors
+included, and signals when one fails.  Nothing is run, and no before
+hook is called.  For your own glue, such as an org block or a message
+to an agent."
+  (let ((bb-transient--menu-directory nil)
+        (bb-transient--menu-layers nil))
+    (bb-transient--join
+     (alist-get 'line (bb-transient--final
+                       (bb-transient--request "run" (or project (bb-transient-project))
+                                              path args))))))
 
 (defun bb-transient-run (path &optional args project terminal silent)
   "Run bb task PATH (a list of names) with ARGS and return its buffer.
@@ -777,6 +943,7 @@ SILENT the compilation buffer is shown only if the command fails or
 asks for input.  A task marked `:bb-transient/singleton' that is still
 running is switched to instead."
   (let ((bb-transient--menu-directory nil)
+        (bb-transient--menu-layers nil)
         (root (or project (bb-transient-project))))
     (bb-transient--run root path args terminal nil
                        ;; Only a task that may be running needs looking up.
@@ -809,7 +976,8 @@ When the top menu asked for copying, copy it instead."
                          (member "++terminal" value)
                          (get sym 'bb-transient-hooks)
                          (alist-get 'singleton (get sym 'bb-transient-node))
-                         (member "++silent" value)))))
+                         (member "++silent" value)
+                         (get sym 'bb-transient-node)))))
 
 (transient-define-suffix bb-transient-copy-current ()
   "Copy the command line `bb-transient-run-current' would run.
@@ -818,7 +986,8 @@ The before hook is not called."
   (let ((sym transient-current-command))
     (bb-transient--copy (get sym 'bb-transient-root)
                         (get sym 'bb-transient-path)
-                        (bb-transient--current-args))))
+                        (bb-transient--current-args)
+                        (get sym 'bb-transient-node))))
 
 (transient-define-suffix bb-transient-toggle-copy ()
   "Copy the next command picked instead of running it."
@@ -830,19 +999,73 @@ The before hook is not called."
 
 ;;;; Entry points
 
-(defun bb-transient--layers (root)
+(defvar bb-transient--layers-cache (make-hash-table :test #'equal)
+  "Project root -> (MTIMES . LAYERS), from `bb-transient-layers-command'.")
+
+(defun bb-transient--mtimes (dirs)
+  "The modification times of the bb.edn in each of DIRS."
+  (mapcar (lambda (dir)
+            (file-attribute-modification-time
+             (file-attributes (expand-file-name "bb.edn" dir))))
+          dirs))
+
+(defun bb-transient--layers-command-output (root)
+  "Run `bb-transient-layers-command' in ROOT; its layers, as (LABEL . DIR)."
+  (let ((default-directory root)
+        (stderr (make-temp-file "bb-transient-err")))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((status (apply #'call-process (car bb-transient-layers-command)
+                               nil (list t stderr) nil (cdr bb-transient-layers-command))))
+            (unless (eql status 0)
+              (error "exit %s: %s" status
+                     (with-temp-buffer
+                       (insert-file-contents stderr)
+                       (string-trim (buffer-string)))))
+            (goto-char (point-max))
+            (forward-line -1)
+            (mapcar (lambda (layer)
+                      (cons (alist-get 'name layer)
+                            (expand-file-name (alist-get 'root layer) root)))
+                    (json-parse-buffer :object-type 'alist :array-type 'list
+                                       :null-object nil :false-object nil))))
+      (delete-file stderr))))
+
+(defun bb-transient--layers-from-command (root refresh)
+  "The layers `bb-transient-layers-command' prints for ROOT, cached.
+The cache holds until ROOT's bb.edn or one of the layers' changes, or
+REFRESH."
+  (let ((hit (gethash root bb-transient--layers-cache)))
+    (if (and hit (not refresh)
+             (equal (car hit) (bb-transient--mtimes (cons root (mapcar #'cdr (cdr hit))))))
+        (cdr hit)
+      (let ((layers (bb-transient--layers-command-output root)))
+        (puthash root (cons (bb-transient--mtimes (cons root (mapcar #'cdr layers))) layers)
+                 bb-transient--layers-cache)
+        layers))))
+
+(defun bb-transient--layers (root &optional refresh)
   "The projects in ROOT's menu as (LABEL . DIRECTORY), outermost first.
-The last is ROOT, labelled by its directory name unless a function in
-`bb-transient-layers-functions' labels it."
+They come from `bb-transient-layers-command', or when that is nil
+from `bb-transient-layers-functions'.  The last is ROOT, labelled by
+its directory name unless the command or a function labels it.
+REFRESH runs the command again."
   (let ((root (file-name-as-directory (expand-file-name root)))
         found layers)
-    (run-hook-wrapped
-     'bb-transient-layers-functions
-     (lambda (fn)
-       (condition-case err
-           (setq found (append found (funcall fn root)))
-         (error (message "bb-transient: %s failed: %s" fn (error-message-string err))))
-       nil))
+    (if bb-transient-layers-command
+        (condition-case err
+            (setq found (bb-transient--layers-from-command root refresh))
+          (error (message "bb-transient: %s failed: %s"
+                          (string-join bb-transient-layers-command " ")
+                          (error-message-string err))))
+      (with-suppressed-warnings ((obsolete bb-transient-layers-functions))
+        (run-hook-wrapped
+         'bb-transient-layers-functions
+         (lambda (fn)
+           (condition-case err
+               (setq found (append found (funcall fn root)))
+             (error (message "bb-transient: %s failed: %s" fn (error-message-string err))))
+           nil))))
     (let ((label (file-name-nondirectory (directory-file-name root))))
       ;; Innermost first, so a project listed twice keeps its inner place.
       (dolist (layer (reverse found))
@@ -868,7 +1091,7 @@ opened; see `bb-transient--define'."
     (clrhash bb-transient--compiled)
     (clrhash bb-transient--required))
   (let* ((root (file-name-as-directory (expand-file-name root)))
-         (layers (bb-transient--layers root))
+         (layers (bb-transient--layers root refresh))
          (sym (intern (format "bb-transient:%s"
                               (substring (md5 (prin1-to-string layers)) 0 6))))
          (taken (list "q" "g" "_"))
@@ -924,16 +1147,19 @@ opened; see `bb-transient--define'."
   (let ((root (or (get transient-current-command 'bb-transient-root)
                   (bb-transient-project))))
     (setq bb-transient--keep-copy bb-transient--copy)
-    (transient-setup (bb-transient--setup root t))))
+    (let ((sym (bb-transient--setup root t)))
+      (setq bb-transient--menu-layers (get sym 'bb-transient-layers))
+      (transient-setup sym))))
 
 ;;;###autoload
 (defun bb-transient ()
   "Open a transient menu of the bb tasks in the current project.
 The project is the one `bb-transient-project-function' returns.
-Projects named by `bb-transient-layers-functions' get groups too."
+Projects named by `bb-transient-layers-command' get groups too."
   (interactive)
   (let ((sym (bb-transient--setup (bb-transient-project))))
     (setq bb-transient--keep-copy nil
+          bb-transient--menu-layers (get sym 'bb-transient-layers)
           bb-transient--menu-directory
           (ignore-errors (funcall bb-transient-directory-function)))
     (transient-setup sym)))

@@ -94,6 +94,14 @@ map wins). Hooks and defaults on metadata must be quoted.
 | `:bb-transient/after`     | cljbang hook called after the command exits  |
 | `:bb-transient/defaults`  | fill options from where point is             |
 
+And at the top level of `bb.edn`:
+
+| Key                            | Effect                                         |
+|--------------------------------|------------------------------------------------|
+| `:bb-transient/cljbang-paths`  | where hook namespaces live                     |
+| `:bb-transient/defaults`       | defaults for every command with that option    |
+| `:bb-transient/interceptors`   | how this layer's commands are run and copied   |
+
 ### Terminal
 
 Full-screen UIs run in an interactive [ghostel][ghostel]
@@ -171,6 +179,80 @@ A hook is a qualified symbol, required from
   command's output (in a terminal, the whole buffer).
 - Only commands run from a menu get hooks, not `bb-transient-run`.
 
+### Interceptors
+
+A layer can change how a command is run or copied, for every menu it
+is a layer of. It lists interceptors at the top level of its `bb.edn`:
+
+```clojure
+;; forge's bb.edn
+{:paths ["src"]
+ :bb-transient/interceptors [atomforge.transient/aa]
+ ...}
+```
+
+Each is a qualified symbol naming a var on that layer's classpath
+(`:paths`, `:deps`), holding an interceptor:
+
+```clojure
+;; src/atomforge/transient.clj
+(ns atomforge.transient)
+
+(def aa
+  "Copy a command as aa. Runs still use bb --config."
+  {:name  ::aa
+   :leave (fn [{:keys [mode path args] :as req}]
+            (cond-> req
+              (= mode :copy) (assoc :line (into ["aa"] (concat path args)))))})
+```
+
+`:enter` and `:leave` are each a function of the request that
+returns the request. Either may be left out, and a bare function is a
+`:leave`. They must be **pure**: no output, no files written, no
+processes. They may read files. Effects belong in hooks.
+
+Picking a command, to run or to copy, makes the request:
+
+| Key         | Example                                      | What it is                                |
+|-------------|----------------------------------------------|-------------------------------------------|
+| `:mode`     | `:run` or `:copy`                            | what the menu is doing                    |
+| `:path`     | `["sandbox" "up"]`                           | the command                               |
+| `:args`     | `["--id=X"]`                                 | its options and extra arguments           |
+| `:root`     | `".../forge/"`                               | the layer the command is from             |
+| `:dir`      | `".../my-project/"`                          | where it runs                             |
+| `:layers`   | `[{:name "atomstream/forge" :root "..."} …]` | the menu's layers, outermost first        |
+| `:origin`   | `{:file ".../task.org" :directory "..."}`    | the buffer the menu was opened from       |
+| `:task`     | `{:name "up" :options [...] :silent true}`   | the command's node, as introspection read it |
+| `:terminal` | `false`                                      | run in a terminal                         |
+| `:silent`   | `true`                                       | run silently                              |
+| `:program`  | `"bb"`                                       | `bb-transient-program`                    |
+| `:line`     | `["bb" "--config" ".../bb.edn" "sandbox" …]` | the command line, as words                |
+
+The chain is Pedestal's, with the layers' lists as one queue:
+
+1. every `:enter`, outermost layer first: change what runs (`:path`,
+   `:args`, `:dir`);
+2. `:line` is built from `:dir`, `:root`, `:path` and `:args`: `bb
+   --config <root>/bb.edn …` when `:dir` is not `:root`, else `bb …`;
+3. every `:leave`, in the reverse order, so the outermost layer has the
+   last word: change how it is written (`:line`).
+
+Emacs then reads back `:mode`, `:line`, `:dir`, `:terminal` and
+`:silent`, and copies the line or runs it in `:dir`. `:line` is words;
+Emacs quotes them for the shell. `:mode` can go from `:run` to `:copy`
+(a command to paste into a block, not run from Emacs), never back.
+
+On a run, the before hook runs first and its args go into the request.
+If an interceptor throws, a copy gets the line without the layers and
+a message says why; a run doesn't run, and the message names the
+interceptor.
+
+The chain runs in bb: `bb-transient.clj intercept` reads the request
+as JSON on stdin and prints the final one, running each layer's
+interceptors on that layer's classpath. A menu whose layers list no
+interceptors starts no process for it. To test an interceptor, call
+it on a map with `bb test` in its own layer.
+
 ### Trust
 
 Defaults and hooks run code inside Emacs. `bb-transient-eval-hooks` is
@@ -187,28 +269,40 @@ commands without them.
 | `bb-transient-project-function`   | nearest `bb.edn`            | which project's menu opens           |
 | `bb-transient-directory-function` | project root                | where commands run                   |
 | `bb-transient-eval-hooks`         | `ask`                       | trust for defaults and hooks         |
-| `bb-transient-layers-functions`   | `nil`                       | other projects' tasks in the menu    |
+| `bb-transient-layers-command`     | `nil`                       | other projects' tasks in the menu    |
 
 ### Layers
 
 Show tasks from other projects in the same menu, a group per project.
-Each function gets the current project root and returns
-`(LABEL . DIRECTORY)` pairs, outermost first:
+`bb-transient-layers-command` is a program and its arguments, run in
+the current project root, that prints the layers as JSON, outermost
+first:
 
 ```elisp
-(add-hook 'bb-transient-layers-functions
-          (lambda (_root) '(("shared" . "~/src/shared-tasks/"))))
+(setq bb-transient-layers-command '("atomforge" "layers" "--json"))
 ```
+
+```json
+[{"name": "atomstream/forge", "root": "/home/me/src/forge/"}]
+```
+
+A relative `root` is taken from the project. Its output is cached and
+read again when a `bb.edn` in the chain changes, or on `g`.
 
 Every command runs from the current project, as `bb --config
 <other>/bb.edn <task>`. Inner tasks hide outer ones of the same name
 (`:cmd` tables aren't merged). Outer projects get keys first, so shared
-keys stay stable across projects.
+keys stay stable across projects. The layers are also the chain a
+command's [interceptors](#interceptors) run in.
+
+`bb-transient-layers-functions`, functions of the project root
+returning `(LABEL . DIRECTORY)` pairs, is obsolete; it is used only
+when the command is nil.
 
 ### Lisp API
 
 - `(bb-transient-run PATH &optional ARGS PROJECT TERMINAL SILENT)` runs a task.
-- `(bb-transient-command-line PATH &optional ARGS PROJECT)` returns the command string.
+- `(bb-transient-command-line PATH &optional ARGS PROJECT)` returns the command string a run would use, interceptors included.
 - `(bb-transient-tasks ROOT)` returns a project's task tree.
 
 [cljbang]: https://github.com/kpassapk/cljbang.el
@@ -217,7 +311,8 @@ keys stay stable across projects.
 ## Development
 
 ```sh
-bb ci      # byte-compile (warnings are errors), then the ERT suite
+bb ci        # byte-compile (warnings are errors), then the tests
+bb test:clj  # only bb-transient.clj's tests, no Emacs needed
 ```
 
 Tests need `bb` on `PATH`. Set `CLJBANG` to cljbang's directory to run

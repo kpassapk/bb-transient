@@ -287,7 +287,8 @@ As pressing their keys would; `bb-transient--setup' must have run."
             (with-current-buffer buf
               (should (file-equal-p default-directory bb-transient-test--fixture)))
             (kill-buffer buf)))
-      (setq bb-transient--menu-directory nil)
+      (setq bb-transient--menu-directory nil
+            bb-transient--menu-layers nil)
       (delete-directory other t))))
 
 ;;;; Defaults from point
@@ -716,5 +717,195 @@ As pressing their keys would; `bb-transient--setup' must have run."
     ;; Only the refresh's own exit; the next one clears it.
     (bb-transient--clear-copy)
     (should-not bb-transient--copy)))
+
+;;;; Interceptors
+
+(defconst bb-transient-test--aa
+  (file-name-as-directory
+   (expand-file-name "../aa" bb-transient-test--fixture))
+  "A layer whose interceptors write a copy as aa; see test/aa.")
+
+(defmacro bb-transient-test--with-aa (&rest body)
+  "Run BODY in the fixture, with the aa layer outside it."
+  (declare (indent 0))
+  `(let ((bb-transient-layers-command nil)
+         (bb-transient-layers-functions
+          (list (lambda (_) (list (cons "aa" bb-transient-test--aa)))))
+         (bb-transient--menu-layers nil)
+         (bb-transient--menu-directory nil)
+         (bb-transient-use-comint nil)
+         (default-directory bb-transient-test--fixture)
+         (kill-ring nil))
+     ,@body))
+
+(defmacro bb-transient-test--messages (&rest body)
+  "Run BODY; the messages it shows, latest first."
+  (declare (indent 0))
+  `(let (messages)
+     (cl-letf (((symbol-function 'message)
+                (lambda (fmt &rest args)
+                  (when fmt (push (apply #'format-message fmt args) messages)))))
+       ,@body)
+     messages))
+
+(defun bb-transient-test--quoted (line &rest words)
+  "Whether LINE is WORDS, quoted as this Emacs quotes them."
+  (equal line (mapconcat #'bb-transient--quote words " ")))
+
+(ert-deftest bb-transient-test-tree-interceptors ()
+  (should (equal (alist-get 'interceptors (bb-transient--read bb-transient-test--aa t))
+                 '("aa.transient/aa" "aa.transient/tricks")))
+  (should-not (alist-get 'interceptors (bb-transient--read bb-transient-test--fixture t))))
+
+(ert-deftest bb-transient-test-copy-aa ()
+  (bb-transient-test--with-aa
+    (should (equal (bb-transient--copy bb-transient-test--fixture '("echo") '("--a=1"))
+                   "aa echo --a=1"))
+    (should (equal (car kill-ring) "aa echo --a=1"))))
+
+(ert-deftest bb-transient-test-copy-aa-quotes ()
+  ;; The interceptor deals in words; Emacs quotes them.
+  (bb-transient-test--with-aa
+    (should (bb-transient-test--quoted
+             (bb-transient--copy bb-transient-test--fixture '("echo") '("--b=Ann Lee" "$HOME"))
+             "aa" "echo" "--b=Ann Lee" "$HOME"))
+    (should (string-match-p "Ann\\\\ Lee" (car kill-ring)))))
+
+(ert-deftest bb-transient-test-run-keeps-config ()
+  ;; aa's interceptor leaves a run's line alone.
+  (bb-transient-test--with-aa
+    (let* ((buf (bb-transient--run bb-transient-test--outer '("outer") nil))
+           (out (bb-transient-test--wait buf)))
+      (should (string-match-p "bb --config .*outer/bb.edn outer" out))
+      (should-not (string-match-p "^aa " out))
+      (kill-buffer buf))))
+
+(ert-deftest bb-transient-test-command-line-is-run-line ()
+  (bb-transient-test--with-aa
+    (should (equal (bb-transient-command-line '("echo") '("--a=1"))
+                   "bb echo --a=1"))))
+
+(ert-deftest bb-transient-test-interceptor-fails-copy ()
+  ;; A copy falls back on the line without the layers.
+  (bb-transient-test--with-aa
+    (let ((messages (bb-transient-test--messages
+                      (should (equal (bb-transient--copy bb-transient-test--fixture
+                                                         '("echo") '("--a=throw"))
+                                     "bb echo --a=throw")))))
+      (should (string-match-p "Not today" (car messages))))))
+
+(ert-deftest bb-transient-test-interceptor-fails-run ()
+  ;; A run doesn't happen at all.
+  (bb-transient-test--with-aa
+    (let (compiled)
+      (let ((messages
+             (bb-transient-test--messages
+               (cl-letf (((symbol-function 'compile) (lambda (&rest _) (setq compiled t))))
+                 (should-not (bb-transient--run bb-transient-test--fixture
+                                                '("echo") '("--a=throw")))))))
+        (should-not compiled)
+        (should-not kill-ring)
+        (should (string-match-p "not running bb echo: .*Not today" (car messages)))))))
+
+(ert-deftest bb-transient-test-no-interceptors-no-process ()
+  (let ((bb-transient-layers-command nil)
+        (bb-transient-layers-functions nil)
+        (bb-transient--menu-layers nil)
+        (bb-transient--menu-directory nil)
+        (bb-transient-use-comint nil)
+        (default-directory bb-transient-test--fixture)
+        (kill-ring nil)
+        called)
+    (bb-transient-tasks bb-transient-test--fixture t)
+    (cl-letf (((symbol-function 'bb-transient--intercept)
+               (lambda (&rest _) (setq called t) (error "No"))))
+      (should (equal (bb-transient--copy bb-transient-test--fixture '("echo") '("--a=1"))
+                     "bb echo --a=1"))
+      (let ((buf (bb-transient--run bb-transient-test--fixture '("echo") '("--a=1"))))
+        (should (string-match-p ":a 1" (bb-transient-test--wait buf)))
+        (kill-buffer buf)))
+    (should-not called)))
+
+(ert-deftest bb-transient-test-run-turned-into-copy ()
+  (bb-transient-test--with-aa
+    (let (compiled)
+      (cl-letf (((symbol-function 'compile) (lambda (&rest _) (setq compiled t))))
+        (should-not (bb-transient--run bb-transient-test--fixture '("echo") '("--a=to-copy"))))
+      (should-not compiled)
+      (should (equal (car kill-ring) "aa echo --a=to-copy")))))
+
+(ert-deftest bb-transient-test-copy-stays-copy ()
+  ;; An interceptor that asks for a run gets a copy all the same: of
+  ;; the line it made for a run.
+  (bb-transient-test--with-aa
+    (let (compiled)
+      (cl-letf (((symbol-function 'compile) (lambda (&rest _) (setq compiled t))))
+        (should (equal (bb-transient--copy bb-transient-test--fixture '("echo") '("--a=to-run"))
+                       "bb echo --a=to-run")))
+      (should-not compiled))))
+
+(ert-deftest bb-transient-test-interceptor-silent ()
+  (bb-transient-test--with-aa
+    (let (silenced)
+      (cl-letf (((symbol-function 'bb-transient--silence)
+                 (lambda (buf _path) (setq silenced buf))))
+        (let ((buf (bb-transient--run bb-transient-test--fixture '("echo") '("--a=quiet"))))
+          (should (eq silenced buf))
+          (bb-transient-test--wait buf)
+          (kill-buffer buf))))))
+
+(ert-deftest bb-transient-test-interceptor-terminal ()
+  (bb-transient-test--with-aa
+    (let ((features (cons 'ghostel-compile features))
+          ran compiled)
+      (cl-letf (((symbol-function 'ghostel-compile)
+                 (lambda (command &rest _)
+                   (setq ran command)
+                   (get-buffer-create "*bb-transient-test-terminal*")))
+                ((symbol-function 'compile) (lambda (&rest _) (setq compiled t))))
+        (kill-buffer (bb-transient--run bb-transient-test--fixture '("echo") '("--a=terminal"))))
+      (should-not compiled)
+      (should (equal ran "bb echo --a=terminal")))))
+
+(ert-deftest bb-transient-test-request-task ()
+  ;; The leaf as introspection read it goes to the interceptors.
+  (bb-transient-test--with-aa
+    (let (sent)
+      (cl-letf (((symbol-function 'bb-transient--intercept)
+                 (lambda (request _roots) (setq sent request)
+                   (cons '(line "x") request))))
+        (bb-transient--copy bb-transient-test--fixture '("echo") nil))
+      (should (equal (alist-get 'name (alist-get 'task sent)) "echo"))
+      (should (equal (mapcar (lambda (l) (alist-get 'name l)) (alist-get 'layers sent))
+                     '("aa" "fixture")))
+      ;; It serializes.
+      (should (stringp (json-serialize (bb-transient--json sent)))))))
+
+;;;; The layers command
+
+(ert-deftest bb-transient-test-layers-command ()
+  (let* ((log (make-temp-file "bb-transient-layers"))
+         (bb-transient-layers-command
+          (list "sh" "-c" (format "echo x >> %s; echo '[{\"name\": \"aa\", \"root\": \"../aa\"}]'"
+                                  (shell-quote-argument log))))
+         (count (lambda () (with-temp-buffer
+                             (insert-file-contents log)
+                             (count-lines (point-min) (point-max))))))
+    (unwind-protect
+        (progn
+          (should (equal (bb-transient--layers bb-transient-test--fixture t)
+                         (list (cons "aa" bb-transient-test--aa)
+                               (cons "fixture" bb-transient-test--fixture))))
+          ;; Cached until a bb.edn changes.
+          (bb-transient--layers bb-transient-test--fixture)
+          (should (= (funcall count) 1))
+          (bb-transient--layers bb-transient-test--fixture t)
+          (should (= (funcall count) 2)))
+      (delete-file log))))
+
+(ert-deftest bb-transient-test-layers-command-fails ()
+  (let ((bb-transient-layers-command '("sh" "-c" "exit 3")))
+    (should (equal (mapcar #'car (bb-transient--layers bb-transient-test--fixture t))
+                   '("fixture")))))
 
 ;;; bb-transient-test.el ends here

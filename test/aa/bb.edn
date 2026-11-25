@@ -1,0 +1,3 @@
+{:paths ["src"]
+ :bb-transient/interceptors [aa.transient/aa aa.transient/tricks]
+ :tasks {}}
