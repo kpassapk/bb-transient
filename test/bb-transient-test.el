@@ -856,9 +856,13 @@ As pressing their keys would; `bb-transient--setup' must have run."
 
 (ert-deftest bb-transient-test-interceptor-terminal ()
   (bb-transient-test--with-aa
-    (let ((features (cons 'ghostel-compile features))
+    (let ((require (symbol-function 'require))
           ran compiled)
-      (cl-letf (((symbol-function 'ghostel-compile)
+      ;; A let of `features' doesn't make `require' see a feature.
+      (cl-letf (((symbol-function 'require)
+                 (lambda (feature &rest args)
+                   (or (eq feature 'ghostel-compile) (apply require feature args))))
+                ((symbol-function 'ghostel-compile)
                  (lambda (command &rest _)
                    (setq ran command)
                    (get-buffer-create "*bb-transient-test-terminal*")))
