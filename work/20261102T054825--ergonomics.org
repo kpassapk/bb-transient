@@ -1,5 +1,5 @@
 #+TARGET: bb_transient ~/src/github.com/kpassapk/bb-transient
-#+LINK:   forge        ~/src/github.com/atomstream/forge
+#+TARGET:   forge        ~/src/github.com/atomstream/forge
 #+TITLE: ergonomics
 #+CATEGORY: work
 
@@ -763,25 +763,294 @@ goes for a =:spec= given as a map with more than 8 options.
    change to =bb-transient--define-menu= only.
 3. Optionally, a menu with many commands and no groups is split into
    columns of ~10, so it fits the frame.
-* Copy command                                                 :bb_transient:
+* Interceptors                                                 :bb_transient:
 :PROPERTIES:
 :BRANCH:   copy-command
 :BASE:     main
 :REPO:     ~/src/github.com/kpassapk/bb-transient
-:ID:       31ADC40A-E260-496B-B6BB-0700B16675D2
+:IMAGE:    bb-claude-emacs
 :END:
 
 [[forge]] uses this library, and implements layers from =forge/parent= in bb.edn, both for the transient and via the =aa= command.
 
 When I copy a command from the transient, it copies =bb --config=...=.
 
-I want it to copy =aa=.
+I want it to copy =aa=, to run command in source code blocks instead of from the transient.
 
-** Proposal
+** Proposal: interceptors
 
-Instead of adding a hook or filter, I want to explore having the 'copy' functionality in this repo as documentation-driven.
+The copied line comes out of a data pipeline that the
+layers take part in, and that pipeline runs in bb, not in Emacs.
 
-That way, forge can follow the documentation to implement its own copy variant. It can also implement another top-level command. This will likely be =SPC= for a dashboard.
+*** The request
+
+Picking a command in the menu, to run or to copy, gives a map. It is
+the whole of what the menu decided, and the only thing that crosses
+from Emacs to the layers:
+
+| Key        | Example                                       | Set by                     |
+|------------+-----------------------------------------------+----------------------------|
+| =:mode=    | =:copy= or =:run=                             | the menu (=_=, copy mode)  |
+| =:path=    | =["sandbox" "up"]=                            | the menu                   |
+| =:args=    | =["--id" "X"]=                                | the options menu, defaults |
+| =:root=    | =".../atomstream/forge/"=                     | the layer the task is from |
+| =:dir=     | =".../kpassapk/bb-transient/"=                | where the command runs     |
+| =:layers=  | =[{:name "atomstream/forge" :root "..."} …]=  | outermost first            |
+| =:origin=  | ={:file ".../task.org" :directory "..."}=     | the buffer the menu was opened from |
+| =:task=    | ={:name "up" :options [...] :silent true}=    | the leaf, as introspection read it |
+| =:terminal= | =false=                                      | the task, and =t= in the options menu |
+| =:silent=  | =true=                                        | the task, and =s= in the options menu |
+| =:line=    | =["bb" "--config" ".../bb.edn" "sandbox" …]=  | bb-transient, see below    |
+
+=:line= is a vector of words. Emacs quotes and joins it
+(=bb-transient--quote=) only at the very end, to copy it or to hand it
+to the shell, so no interceptor deals with shell quoting.
+
+=:task= is the leaf from the cached task tree: its options, their
+defaults, its flags. An interceptor that needs a task's spec reads it
+there instead of resolving the =:exec-fn= again.
+
+What Emacs reads back from the final request: =:mode=, =:line=,
+=:dir=, =:terminal= and =:silent=. The rest is for the interceptors.
+=:mode= may go from =:run= to =:copy=, never back: a layer can say a
+command is to be pasted into a block rather than run from Emacs, but
+a copy never runs anything. =:terminal= and =:silent= matter only on a
+run.
+
+*** Interceptors
+
+A layer lists its interceptors at the top level of its =bb.edn=:
+
+#+begin_src clojure
+;; forge's bb.edn
+{:paths ["src"]
+ :bb-transient/interceptors [atomforge.transient/aa]
+ ...}
+#+end_src
+
+Each is a qualified symbol naming a var in that layer's classpath
+(=:paths=, =:deps=), holding an interceptor:
+
+#+begin_src clojure
+;; forge: src/atomforge/transient.clj
+(ns atomforge.transient)
+
+(def aa
+  "Copy a command as aa, which runs it from any layer of the chain.
+  Runs still use bb --config: Emacs may not have aa on its PATH."
+  {:name  ::aa
+   :leave (fn [{:keys [mode path args] :as req}]
+            (cond-> req
+              (= mode :copy) (assoc :line (into ["aa"] (concat path args)))))})
+#+end_src
+
+=:enter= and =:leave= are each a function of the request that returns
+the request: map in, map out. Either may be left out; a bare function
+in place of the map is its =:leave=. They are pure: no output, no
+files written, no processes. They may read files (=:origin= is there so
+they can find a =.stub=, say).
+
+*** The chain
+
+Pedestal's order, with the layers as the queue, outermost first, and
+bb-transient's own step at the end:
+
+1. Every =:enter=, outermost layer first. Here an interceptor changes
+   what runs: =:path=, =:args=, =:dir=.
+2. bb-transient builds =:line= from the final =:dir=, =:root=, =:path=
+   and =:args=: =bb --config <root>/bb.edn …= when =:dir= is not
+   =:root=, =bb …= when it is. This is =bb-transient--line=, moved to
+   Clojure.
+3. Every =:leave=, innermost layer first. Here an interceptor changes
+   how it is written: =:line=.
+
+Splitting it this way is what lets an =:enter= move =:dir= without
+having to rebuild the line, and a =:leave= rewrite the line knowing
+=:dir= is final. The outermost layer has the last word on =:line=,
+which suits =aa=: forge's chain is what =aa= runs, so forge says how a
+line for it is written. An inner layer that wants its own line sets a
+key in =:enter= that forge's =:leave= respects, or its project leaves
+forge's chain.
+
+| Without interceptors                                   | With forge's =aa=      |
+|--------------------------------------------------------+------------------------|
+| =bb --config ~/src/.../forge/bb.edn sandbox up --id X= | =aa sandbox up --id X= |
+| =bb test=                                              | =aa test=              |
+
+A project whose chain doesn't reach forge gets no =aa=, since no layer
+of it lists one.
+
+*** Uses
+
+Things a layer can do with the chain:
+
+- /Modify how the line is written/ (=:leave=)
+  - Wrap a run in the layer's toolchain: =direnv exec . bb …=,
+    =nix develop -c …=, =mise exec -- …=. Emacs's PATH often lacks
+    what the layer needs.
+  - Run inside a box: prefix =podman exec box-… =, and set =:terminal=.
+  - Make a copy portable: =~/src/…= for =/home/…/src/…=, or
+    =cd ~/src/… &&= first, so a pasted line runs from anywhere.
+  - Environment: =FOO=bar aa …=, as words.
+- /What runs/ (=:enter=)
+  - Shorter copies: drop args equal to their defaults in =:task=.
+  - Normalize args: paths against =:dir=, canonical ids.
+  - Rename: an old =:path= to its new name while a task migrates.
+  - Use a dev checkout: point =:root= at a local worktree of a layer.
+  - Pick =:dir=: the git toplevel, a monorepo subproject, a worktree,
+    from =:origin= and the filesystem.
+  - Fill an option the filesystem knows when it is missing, as forge's
+    =:book= (a regex on the file name) and =:root= (the =.git= above
+    it) defaults do now.
+- /Guards/
+  - Refuse a run by throwing: =sandbox land= on a dirty checkout, or a
+    combination of options a =babashka.cli= spec can't express. A copy
+    still gets the default line.
+  - Turn a run into a copy, for commands the operator runs from a block.
+
+What it does not cover:
+- /Defaults in the menu./ The chain runs after the pick, not when the
+  menu opens. A value an =:enter= fills is not shown or editable in
+  the menu, and "(required)" is checked before the chain, so it is not
+  satisfied by one. That stays =:bb-transient/defaults=.
+- /Effects./ No log, no files, nothing after the run. That stays the
+  before and after hooks.
+
+*** Where it runs: bb, not Emacs
+
+Emacs makes one call, =bb -f bb-transient.clj intercept=, with the
+request as JSON on stdin, and reads the final request back. The
+threading through the layers, the =:line= step, and the defaults for
+missing keys are all in =bb-transient.clj=. Each layer's interceptors
+run on that layer's classpath: the script runs them with =bb --config
+<layer>/bb.edn= for each layer that lists any (one, forge, in
+practice), passing the map along.
+
+Compared with the cljbang hook:
+- *No trust prompt, no cljbang.* bb already loads a layer's code to
+  read its tasks, and runs it when a task runs. An interceptor is that
+  same code, run the same way.
+- *Testable without Emacs.* An interceptor is a function of a map,
+  tested with =bb test= in the layer that defines it.
+- *Same from the terminal.* =atomforge= (and =aa=) can run the same
+  chain to print a line, so Emacs and the CLI agree on what a command
+  looks like.
+
+The cost is a bb process per command for a menu whose layers list
+interceptors. Introspection reports each layer's =interceptors=, next
+to =cljbang-paths=, so a menu with none starts no process and stays as
+fast as today.
+
+*** Run and copy go through the same chain
+
+The request carries =:mode=, and both go through the chain; Emacs then
+copies =:line= or runs it in =:dir=. That makes "only a copy says
+=aa=" forge's decision, in =aa='s =:leave=, instead of a rule in
+bb-transient. =bb-transient-command-line= returns the =:run= line, as
+now.
+
+The before hook still runs first on a run, in Emacs, and its new args
+go into the request; the after hook still runs after. Hooks stay for
+effects inside Emacs (saving buffers, visiting files); interceptors
+are for data. A copy calls no before hook, as now.
+
+*** When it fails
+
+An interceptor that throws, or a bb that exits non-zero:
+- copy: the line from step 2 without the layers, with a message saying
+  why. A copy never fails because of a layer.
+- run: nothing runs, and the message names the interceptor, as when a
+  before hook throws. Running a fallback command in a directory the
+  layer meant to change would be worse than not running.
+
+*** Layers out of Elisp
+
+Today the chain is worked out twice: =atomforge--chain= in
+=atomforge.el= for the menu, and =chain= in =atomforge/cli.clj= for
+=aa=. Both read =:forge/parent=, the elisp one with a regexp.
+
+=bb-transient-layers-functions= gives way to a command:
+
+- =bb-transient-layers-command=: a program and its arguments, run in
+  the project root, printing the layers as JSON, outermost first,
+  =[{"name": "atomstream/forge", "root": "..."}, …]=. nil means just
+  the project.
+- atomforge sets it to =("atomforge" "layers" "--json")=, a new
+  subcommand over =cli.clj='s =chain=, and drops
+  =atomforge--chain=, =--parent-name=, =--parent-dir= and
+  =--source-directory=. One chain, in Clojure, used by the menu, =aa=
+  and the interceptors' =:layers=.
+- =bb-transient-layers-functions= stays one release as an obsolete
+  fallback, used when the command is nil.
+
+The command's output is cached with the task tree and read again when
+a =bb.edn= in the chain changes.
+
+*** Still to decide
+
+- *The =work= directory rule.* =atomforge-directory= runs =work …= in
+  the stub's project. As an =:enter= in forge reading =:origin= for a
+  =.stub=, it would be Clojure too, and the =aa work …= line would get
+  the same =:dir= (as a =cd … &&=, or an =aa -C=?). Not needed for
+  =aa=; worth it as a second step. The =:REPO:= lookup
+  (=atomforge-project=) reads the Org buffer and stays in Emacs.
+- *The order of =:leave=.* Outermost-last suits =aa=. If inner layers
+  often need their own line, flip it, so the innermost has the last
+  word, as task shadowing does.
+- *Per-task interceptors*, in a task map like =:bb-transient/after=.
+  Left out: a top-level list that tests =:path= covers it, and keeps
+  the chain in one place per layer.
+- *One bb per layer.* Fine for one layer with interceptors. If several
+  do, the script could load each layer's =:paths= into one process
+  instead, at the price of their =:deps=.
+
+* Interceptors in bb-transient                                 :bb_transient:
+:PROPERTIES:
+:BRANCH:   interceptors-in-bb-transient
+:BASE:     main
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:ID:       6784E63B-30B6-4F74-AA81-18D877C5807A
+:END:
+
+See [[* Interceptors]]
+
+- =bb-transient.clj=: report =:bb-transient/interceptors= per layer;
+  add =intercept=, which threads a request through the layers and
+  builds =:line=.
+- =bb-transient.el=: build the request where the three copy paths meet
+  (=bb-transient--copy=) and where a run starts
+  (=bb-transient--start=), call =intercept= when any layer has
+  interceptors, and copy or run the result. =bb-transient--line=
+  becomes the Clojure step. =bb-transient-layers-command=, with the
+  old hook as fallback.
+- README: the request's keys, the chain's order, the key in the table,
+  that interceptors are pure; the layers command under /Layers/.
+- Tests: in Clojure, for =intercept=: no interceptors gives today's
+  line; =:enter= order, =:leave= order; an =:enter= that moves =:dir=
+  gets a line without =--config=; a bare function is a =:leave=; a
+  throwing interceptor. In ERT, next to /Copying/: copy with a fixture
+  layer that writes =aa=; a run that keeps =bb --config=; a failing
+  interceptor falls back on copy and refuses on run; words that need
+  quoting are quoted; no process when no layer has interceptors; a run
+  an interceptor turns into =:copy= is copied, not run, and a copy
+  turned into =:run= is still only copied; =:terminal= and =:silent=
+  set by an interceptor are used on a run.
+
+* Interceptors in forge                                               :forge:
+:PROPERTIES:
+:BRANCH:   interceptors-in-forge
+:BASE:     main
+:REPO:     ~/src/github.com/atomstream/forge
+:ID:       2BED1715-5038-45C3-85D5-B3B31664E915
+:END:
+
+See [[* Interceptors]]
+
+- =src/atomforge/transient.clj= with =aa=, one line in =bb.edn=, a
+  test.
+- =atomforge layers --json=; =atomforge.el= sets the command and loses
+  its chain code.
+
 
 
 
