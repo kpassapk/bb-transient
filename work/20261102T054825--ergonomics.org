@@ -1,4 +1,5 @@
 #+TARGET: bb_transient ~/src/github.com/kpassapk/bb-transient
+#+LINK:   forge        ~/src/github.com/atomstream/forge
 #+TITLE: ergonomics
 #+CATEGORY: work
 
@@ -13,15 +14,7 @@ This package should provide a good base experience, for bb projects.
 =project-switch-project= would not show the transient for the selected
 project, but rather for the current project.
 
-* Improvements
-:PROPERTIES:
-:REPO:     ~/src/github.com/kpassapk/bb-transient
-:BRANCH:   ergonomics-improvements
-:BASE:     main
-:ID:       629E1E62-4F12-4F0F-A77F-51C01C09E4DB
-:END:
-
-** Silence output                                             :bb_transient:
+* DONE Silence output                                          :bb_transient:
 :PROPERTIES:
 :BRANCH:   silence-output
 :BASE:     main
@@ -673,7 +666,7 @@ need to run in the checkout.
 
 Posted: [[https://github.com/kpassapk/bb-transient/pull/1#issuecomment-7139970020]]
 
-** Copy command
+* DONE Copy command
 :PROPERTIES:
 :REPO:     ~/src/github.com/kpassapk/bb-transient
 :BRANCH:   copy-cmd
@@ -770,24 +763,26 @@ goes for a =:spec= given as a map with more than 8 options.
    change to =bb-transient--define-menu= only.
 3. Optionally, a menu with many commands and no groups is split into
    columns of ~10, so it fits the frame.
+* Copy command                                                 :bb_transient:
+:PROPERTIES:
+:BRANCH:   copy-command
+:BASE:     main
+:REPO:     ~/src/github.com/kpassapk/bb-transient
+:ID:       31ADC40A-E260-496B-B6BB-0700B16675D2
+:END:
 
-** Specify a key
+[[forge]] uses this library, and implements layers from =forge/parent= in bb.edn, both for the transient and via the =aa= command.
 
-The =bb work snapshot= command is analogous to magit's snapshot.
-magit has key "z" in its transient, and mine is auto-generated.
+When I copy a command from the transient, it copies =bb --config=...=.
 
-I have some muscle memory with magit's key combinations. 
+I want it to copy =aa=.
 
-*** Proposal
+** Proposal
 
-=:bb-transient/key "z"= on a command (task map or fn metadata), and
-on an option in its spec map (=:bb-transient/key "-f"=, overriding
-=:alias=).
+Instead of adding a hook or filter, I want to explore having the 'copy' functionality in this repo as documentation-driven.
 
-- Explicit keys are placed first, then the rest get auto keys from
-  what's left, so an explicit =z= never loses to an auto one.
-- Two explicit keys clashing in one menu, or one on =q=, =g=, =RET=,
-  =t=, =s=, =w= (the built-ins): a message, and the later one gets an auto
-  key.
-- Multi-key sequences (="w c"=) work, as transient allows them.
+That way, forge can follow the documentation to implement its own copy variant. It can also implement another top-level command. This will likely be =SPC= for a dashboard.
+
+
+
 
