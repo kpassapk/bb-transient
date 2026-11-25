@@ -1,0 +1,3 @@
+{:paths ["src"]
+ :bb-transient/interceptors [chain.inner/trace]
+ :tasks {}}

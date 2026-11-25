@@ -5,7 +5,14 @@
             ;; cljbang's directory; without it the cljbang tests skip
             (def cljbang (System/getenv "CLJBANG")))
 
-  test {:doc "Run the ERT suite (set CLJBANG to cljbang's directory to test defaults)"
+  test:clj {:doc "Run bb-transient.clj's tests"
+            :task (do (load-file "test/bb_transient_test.clj")
+                      (let [{:keys [fail error]} ((requiring-resolve 'clojure.test/run-tests)
+                                                  'bb-transient-test)]
+                        (when (pos? (+ fail error)) (System/exit 1))))}
+
+  test {:doc "Run the Clojure tests, then the ERT suite (set CLJBANG to cljbang's directory to test defaults)"
+        :depends [test:clj]
         :task (apply shell emacs "--batch" "-L" "." "-L" "test"
                      (concat (when cljbang ["-L" cljbang])
                              ["-l" "ert" "-l" "test/bb-transient-test.el"
