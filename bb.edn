@@ -11,10 +11,15 @@
                              ["-l" "ert" "-l" "test/bb-transient-test.el"
                               "-f" "ert-run-tests-batch-and-exit"]))}
 
-  compile {:doc "Byte-compile"
-           :task (shell emacs "--batch" "-L" "."
-                        "--eval" "(setq byte-compile-error-on-warn t)"
-                        "-f" "batch-byte-compile" "bb-transient.el")}
+  ;; Only a check: it leaves no .elc, pass or fail.  Emacsen that load
+  ;; bb-transient from this checkout would otherwise pick up a stale one.
+  compile {:doc "Byte-compile (warnings are errors; leaves no .elc)"
+           :requires ([babashka.fs :as fs])
+           :task (let [{:keys [exit]} (shell {:continue true} emacs "--batch" "-L" "."
+                                             "--eval" "(setq byte-compile-error-on-warn t)"
+                                             "-f" "batch-byte-compile" "bb-transient.el")]
+                   (fs/delete-if-exists "bb-transient.elc")
+                   (when-not (zero? exit) (System/exit exit)))}
 
   ci {:doc "What CI runs"
       :depends [compile test]}
