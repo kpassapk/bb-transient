@@ -2,7 +2,7 @@
 
 ;; Author: Kyle Passarelli
 ;; URL: https://github.com/kpassapk/bb-transient
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "29.1") (transient "0.4"))
 ;; Keywords: tools, processes, babashka, clojure
 
