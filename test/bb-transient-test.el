@@ -717,4 +717,93 @@ As pressing their keys would; `bb-transient--setup' must have run."
     (bb-transient--clear-copy)
     (should-not bb-transient--copy)))
 
+(ert-deftest bb-transient-test-line-function-copy-not-run ()
+  (let* ((root bb-transient-test--fixture)
+         (default-directory root)
+         (bb-transient-line-functions
+          (list (lambda (_words info)
+                  (when (eq (plist-get info :mode) 'copy)
+                    (cons "aa" (append (plist-get info :path)
+                                       (plist-get info :args)))))))
+         (kill-ring nil))
+    (should (equal (bb-transient--copy root '("greet" "hello") nil)
+                   "aa greet hello"))
+    (should (equal (car kill-ring) "aa greet hello"))
+    (should (equal (bb-transient-command-line '("greet" "hello"))
+                   "bb greet hello"))))
+
+(ert-deftest bb-transient-test-line-function-run-rewritten ()
+  (let* ((default-directory bb-transient-test--fixture)
+         (bb-transient-line-functions
+          (list (lambda (words info)
+                  (when (eq (plist-get info :mode) 'run)
+                    (append words (list "--name=Zed")))))))
+    (should (member (bb-transient-command-line '("greet" "hello"))
+                    '("bb greet hello --name=Zed")))))
+
+(ert-deftest bb-transient-test-line-functions-in-order ()
+  (let ((default-directory bb-transient-test--fixture)
+        (bb-transient-line-functions
+         (list (lambda (words _) (append words '("one")))
+               (lambda (words _) (append words (list (format "after-%d" (length words))))))))
+    (should (equal (bb-transient-command-line '("greet"))
+                   "bb greet one after-3"))))
+
+(ert-deftest bb-transient-test-line-function-nil-keeps-words ()
+  (let ((default-directory bb-transient-test--fixture)
+        (bb-transient-line-functions
+         (list (lambda (_words _) nil)
+               (lambda (words _) (append words '("x")))
+               #'ignore)))
+    (should (equal (bb-transient-command-line '("greet")) "bb greet x"))))
+
+(ert-deftest bb-transient-test-line-function-info ()
+  (let* ((root bb-transient-test--fixture)
+         (default-directory root)
+         seen
+         (bb-transient-line-functions
+          (list (lambda (_words info) (setq seen info) nil))))
+    (bb-transient-command-line '("greet" "hello") '("--name=A"))
+    (should (eq (plist-get seen :mode) 'run))
+    (should (equal (plist-get seen :path) '("greet" "hello")))
+    (should (equal (plist-get seen :args) '("--name=A")))
+    (should (file-equal-p (plist-get seen :root) root))
+    (should (file-equal-p (plist-get seen :dir) root))
+    (should (file-equal-p (cdar (last (plist-get seen :layers))) root))))
+
+(ert-deftest bb-transient-test-line-function-quoting ()
+  (let ((default-directory bb-transient-test--fixture)
+        (bb-transient-line-functions
+         (list (lambda (words _) (append words '("a b" "$x"))))))
+    (should (string-match-p " a\\\\ b \\\\\\$x\\'"
+                            (bb-transient-command-line '("greet"))))))
+
+(ert-deftest bb-transient-test-line-function-error-copy-falls-back ()
+  (let* ((root bb-transient-test--fixture)
+         (default-directory root)
+         (bb-transient-line-functions
+          (list (lambda (_words _) (error "Boom"))))
+         (kill-ring nil)
+         (msgs nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args) (push (apply #'format fmt args) msgs))))
+      (bb-transient--copy root '("greet" "hello") nil))
+    (should (equal (car kill-ring) "bb greet hello"))
+    (should (seq-some (lambda (m) (string-match-p "Boom" m)) msgs))))
+
+(ert-deftest bb-transient-test-line-function-error-run-does-not-run ()
+  (let* ((root bb-transient-test--fixture)
+         (default-directory root)
+         (bb-transient-line-functions
+          (list (lambda (_words _) (error "Boom"))))
+         (compiled nil)
+         (msgs nil))
+    (cl-letf (((symbol-function 'compile)
+               (lambda (&rest _) (setq compiled t)))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args) (push (apply #'format fmt args) msgs))))
+      (should-not (bb-transient--run root '("greet" "hello") nil)))
+    (should-not compiled)
+    (should (seq-some (lambda (m) (string-match-p "Line function .*Boom" m)) msgs))))
+
 ;;; bb-transient-test.el ends here

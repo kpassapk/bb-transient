@@ -171,6 +171,30 @@ A hook is a qualified symbol, required from
   command's output (in a terminal, the whole buffer).
 - Only commands run from a menu get hooks, not `bb-transient-run`.
 
+### Line functions
+
+`bb-transient-line-functions` rewrites a command line before it is
+copied or run. Each function gets the line as a list of words and a
+plist, and returns new words, or `nil` to leave them alone:
+
+```elisp
+(add-hook 'bb-transient-line-functions
+          (lambda (words info)
+            (when (eq (plist-get info :mode) 'copy)
+              (cons "aa" (append (plist-get info :path) (plist-get info :args))))))
+```
+
+- **INFO** has `:mode` (`copy` or `run`), `:path`, `:args`, `:root`,
+  `:dir` and `:layers`, the `(LABEL . DIR)` list of the open menu, or the
+  project's when there is none.
+- Functions run in order, each seeing the previous one's words. A run
+  sees them after the `before` hook, with the args it returned.
+- Words are quoted and joined last, so a function never quotes.
+- A function that signals: a copy falls back to the line without the
+  rewrite, and a message says why; a run doesn't run, and the message
+  names the function.
+- `bb-transient-command-line` uses `:mode run`.
+
 ### Trust
 
 Defaults and hooks run code inside Emacs. `bb-transient-eval-hooks` is
@@ -188,6 +212,7 @@ commands without them.
 | `bb-transient-directory-function` | project root                | where commands run                   |
 | `bb-transient-eval-hooks`         | `ask`                       | trust for defaults and hooks         |
 | `bb-transient-layers-functions`   | `nil`                       | other projects' tasks in the menu    |
+| `bb-transient-line-functions`     | `nil`                       | rewrite a line before copy or run    |
 
 ### Layers
 
@@ -208,7 +233,7 @@ keys stay stable across projects.
 ### Lisp API
 
 - `(bb-transient-run PATH &optional ARGS PROJECT TERMINAL SILENT)` runs a task.
-- `(bb-transient-command-line PATH &optional ARGS PROJECT)` returns the command string.
+- `(bb-transient-command-line PATH &optional ARGS PROJECT)` returns the command string, as a run would use it (after `bb-transient-line-functions`).
 - `(bb-transient-tasks ROOT)` returns a project's task tree.
 
 [cljbang]: https://github.com/kpassapk/cljbang.el
