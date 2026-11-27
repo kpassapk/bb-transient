@@ -583,9 +583,9 @@ Start OBS if it isn't running, and start recording.
 #+end_src
 
 #+RESULTS: rec-start
-: Executing: Start recording
-: Starting recording...
-: Recording started successfully
+: Connection attempt 1 failed, retrying in 2 seconds...
+: Connection attempt 2 failed, retrying in 2 seconds...
+: Error: ConnectionError(Handshake(ConnectionClosed(Some(CloseDetails { code: CloseCode(4009), reason: "Authentication failed." }))))
 
 Do the demo (=M-x bb-transient= → demo → tetris), then stop. This also
 prints the recording made since =rec-start=, which is the file the upload block takes.
@@ -763,7 +763,7 @@ goes for a =:spec= given as a map with more than 8 options.
    change to =bb-transient--define-menu= only.
 3. Optionally, a menu with many commands and no groups is split into
    columns of ~10, so it fits the frame.
-* Interceptors                                                 :bb_transient:
+* REJECTED Interceptors                                        :bb_transient:
 :PROPERTIES:
 :BRANCH:   copy-command
 :BASE:     main
@@ -1004,7 +1004,7 @@ a =bb.edn= in the chain changes.
   do, the script could load each layer's =:paths= into one process
   instead, at the price of their =:deps=.
 
-* Interceptors in bb-transient                                 :bb_transient:
+* REJECTED Interceptors in bb-transient                        :bb_transient:
 :PROPERTIES:
 :BRANCH:   interceptors-in-bb-transient
 :BASE:     main
@@ -1012,6 +1012,8 @@ a =bb.edn= in the chain changes.
 :ID:       6784E63B-30B6-4F74-AA81-18D877C5807A
 :IMAGE:    bb-claude-emacs
 :END:
+
+Status: This was rejected, in favor of a "line functions" alternative.
 
 See [[* Interceptors]]
 
@@ -1147,7 +1149,7 @@ moved interceptors-in-bb-transient: (new) -> 179b109
   bb ci
 #+end_src
 
-* Interceptors in forge                                               :forge:
+* REJECTED Interceptors in forge                                      :forge:
 :PROPERTIES:
 :BRANCH:   interceptors-in-forge
 :BASE:     main
